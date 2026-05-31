@@ -109,7 +109,8 @@ const processRecurringPlans = async () => {
 
                 // Calculate next due date
                 let nextDate = new Date(plan.nextDueDate);
-                if (plan.frequency === 'WEEKLY') nextDate.setDate(nextDate.getDate() + 7);
+                if (plan.frequency === 'DAILY') nextDate.setDate(nextDate.getDate() + 1);
+                else if (plan.frequency === 'WEEKLY') nextDate.setDate(nextDate.getDate() + 7);
                 else if (plan.frequency === 'MONTHLY') nextDate.setMonth(nextDate.getMonth() + 1);
                 else if (plan.frequency === 'YEARLY') nextDate.setFullYear(nextDate.getFullYear() + 1);
 

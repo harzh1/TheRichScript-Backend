@@ -93,6 +93,7 @@ enum PlannedExpenseType {
 }
 
 enum Frequency {
+  DAILY
   WEEKLY
   MONTHLY
   YEARLY
