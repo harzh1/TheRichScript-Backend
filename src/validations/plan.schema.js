@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const createPlanSchema = z.object({
   body: z.object({
     assetId: z.string().uuid('Invalid Asset ID'),
+    targetAssetId: z.string().uuid('Invalid Target Asset ID').optional().nullable(),
     name: z.string().min(1, 'Plan name is required'),
     category: z.string().min(1, 'Category is required'),
     amount: z.coerce.number().positive('Amount must be greater than 0'),

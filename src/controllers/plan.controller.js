@@ -13,12 +13,13 @@ export const getPlans = async (req, res) => {
 
 export const createPlan = async (req, res) => {
     try {
-        const { assetId, name, category, amount, type, frequency, nextDueDate } = req.body;
+        const { assetId, targetAssetId, name, category, amount, type, frequency, nextDueDate } = req.body;
 
         const plan = await prisma.plannedExpense.create({
             data: {
                 userId: req.user.userId,
                 assetId,
+                ...(targetAssetId && { targetAssetId }),
                 name,
                 category: category.toUpperCase(),
                 amount: parseFloat(amount),
@@ -37,12 +38,13 @@ export const createPlan = async (req, res) => {
 export const updatePlan = async (req, res) => {
     try {
         const { id } = req.params;
-        const { assetId, name, category, amount, frequency, nextDueDate } = req.body;
+        const { assetId, targetAssetId, name, category, amount, frequency, nextDueDate } = req.body;
 
         const plan = await prisma.plannedExpense.updateMany({
             where: { id, userId: req.user.userId },
             data: {
                 ...(assetId && { assetId }),
+                ...(targetAssetId !== undefined && { targetAssetId: targetAssetId || null }),
                 ...(name && { name }),
                 ...(category && { category: category.toUpperCase() }),
                 ...(amount !== undefined && { amount: parseFloat(amount) }),

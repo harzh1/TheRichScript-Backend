@@ -39,7 +39,8 @@ model Asset {
   updatedAt DateTime @updatedAt
 
   transactions    Transaction[]
-  plannedExpenses PlannedExpense[]
+  plannedExpensesSource PlannedExpense[] @relation("SourceAsset")
+  plannedExpensesTarget PlannedExpense[] @relation("TargetAsset")
   debts           Debt[]
   goals           Goal[]
 }
@@ -102,7 +103,9 @@ model PlannedExpense {
   userId      String
   user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   assetId     String
-  asset       Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  asset       Asset              @relation(name: "SourceAsset", fields: [assetId], references: [id], onDelete: Cascade)
+  targetAssetId String?
+  targetAsset Asset?             @relation(name: "TargetAsset", fields: [targetAssetId], references: [id], onDelete: SetNull)
   name        String
   category    String
   amount      Float

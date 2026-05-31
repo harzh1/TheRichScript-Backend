@@ -6,6 +6,8 @@ export const initCronJobs = () => {
     cron.schedule('0 0 * * *', async () => {
         console.log('Running daily auto-funding task...');
         await processAutoFunding();
+        console.log('Running daily recurring plans task...');
+        await processRecurringPlans();
     });
 };
 
@@ -78,5 +80,99 @@ const processAutoFunding = async () => {
         }
     } catch (error) {
         console.error('[CRON] Error in auto-funding task:', error);
+    }
+};
+
+const processRecurringPlans = async () => {
+    try {
+        const now = new Date();
+        const plans = await prisma.plannedExpense.findMany({
+            where: {
+                type: 'RECURRING',
+                nextDueDate: { lte: now }
+            }
+        });
+
+        for (const plan of plans) {
+            const asset = await prisma.asset.findUnique({ where: { id: plan.assetId } });
+            if (!asset || asset.value < plan.amount) {
+                console.log(`[CRON] Failed to process plan: ${plan.name}. Insufficient funds or asset missing.`);
+                continue;
+            }
+
+            await prisma.$transaction(async (tx) => {
+                // Deduct from source
+                await tx.asset.update({
+                    where: { id: asset.id },
+                    data: { value: asset.value - plan.amount }
+                });
+
+                // Calculate next due date
+                let nextDate = new Date(plan.nextDueDate);
+                if (plan.frequency === 'WEEKLY') nextDate.setDate(nextDate.getDate() + 7);
+                else if (plan.frequency === 'MONTHLY') nextDate.setMonth(nextDate.getMonth() + 1);
+                else if (plan.frequency === 'YEARLY') nextDate.setFullYear(nextDate.getFullYear() + 1);
+
+                await tx.plannedExpense.update({
+                    where: { id: plan.id },
+                    data: { 
+                        lastFundedAt: now,
+                        nextDueDate: nextDate
+                    }
+                });
+
+                // Is it a transfer or expense?
+                if (plan.targetAssetId) {
+                    const targetAsset = await tx.asset.findUnique({ where: { id: plan.targetAssetId } });
+                    if (targetAsset) {
+                        await tx.asset.update({
+                            where: { id: targetAsset.id },
+                            data: { value: targetAsset.value + plan.amount }
+                        });
+                        
+                        // Log 2 transactions
+                        await tx.transaction.create({
+                            data: {
+                                userId: plan.userId,
+                                assetId: asset.id,
+                                type: 'EXPENSE',
+                                amount: plan.amount,
+                                category: 'TRANSFER OUT',
+                                description: `Transfer to ${targetAsset.name} (${plan.name})`,
+                                date: now
+                            }
+                        });
+                        await tx.transaction.create({
+                            data: {
+                                userId: plan.userId,
+                                assetId: targetAsset.id,
+                                type: 'INCOME',
+                                amount: plan.amount,
+                                category: 'TRANSFER IN',
+                                description: `Transfer from ${asset.name} (${plan.name})`,
+                                date: now
+                            }
+                        });
+                        console.log(`[CRON] Successfully processed transfer subscription: ${plan.name}`);
+                    }
+                } else {
+                    // Regular expense
+                    await tx.transaction.create({
+                        data: {
+                            userId: plan.userId,
+                            assetId: asset.id,
+                            type: 'EXPENSE',
+                            amount: plan.amount,
+                            category: plan.category,
+                            description: `Auto-expense: ${plan.name}`,
+                            date: now
+                        }
+                    });
+                    console.log(`[CRON] Successfully processed recurring expense: ${plan.name}`);
+                }
+            });
+        }
+    } catch (error) {
+        console.error('[CRON] Error in recurring plans task:', error);
     }
 };
