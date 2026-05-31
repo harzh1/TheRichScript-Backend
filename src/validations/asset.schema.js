@@ -4,8 +4,8 @@ export const createAssetSchema = z.object({
   body: z.object({
     name: z.string().min(1, 'Asset name is required'),
     type: z.string().min(1, 'Asset type is required'),
-    value: z.number().min(0, 'Asset value cannot be negative'),
-    quantity: z.number().optional().nullable()
+    value: z.coerce.number().min(0, 'Asset value cannot be negative'),
+    quantity: z.coerce.number().optional().nullable()
   })
 });
 
@@ -16,8 +16,8 @@ export const updateAssetSchema = z.object({
   body: z.object({
     name: z.string().min(1).optional(),
     type: z.string().min(1).optional(),
-    value: z.number().min(0, 'Asset value cannot be negative').optional(),
-    quantity: z.number().optional().nullable()
+    value: z.coerce.number().min(0, 'Asset value cannot be negative').optional(),
+    quantity: z.coerce.number().optional().nullable()
   })
 });
 

@@ -5,7 +5,7 @@ export const createPlanSchema = z.object({
     assetId: z.string().uuid('Invalid Asset ID'),
     name: z.string().min(1, 'Plan name is required'),
     category: z.string().min(1, 'Category is required'),
-    amount: z.number().positive('Amount must be greater than 0'),
+    amount: z.coerce.number().positive('Amount must be greater than 0'),
     type: z.enum(['MANUAL', 'RECURRING'], { required_error: 'Type must be MANUAL or RECURRING' }),
     frequency: z.enum(['WEEKLY', 'MONTHLY', 'YEARLY']).optional().nullable(),
     nextDueDate: z.string().optional().nullable()

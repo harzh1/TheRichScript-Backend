@@ -8,10 +8,10 @@ export const validate = (schema) => (req, res, next) => {
       params: req.params,
     });
     
-    // Replace req properties with validated ones
-    req.body = parsed.body;
-    req.query = parsed.query;
-    req.params = parsed.params;
+    // Replace req properties with validated ones if defined in schema
+    req.body = parsed.body !== undefined ? parsed.body : req.body;
+    req.query = parsed.query !== undefined ? parsed.query : req.query;
+    req.params = parsed.params !== undefined ? parsed.params : req.params;
     
     next();
   } catch (err) {

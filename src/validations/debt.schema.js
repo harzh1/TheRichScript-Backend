@@ -6,7 +6,7 @@ export const createDebtSchema = z.object({
     type: z.enum(['LENT', 'BORROWED'], { required_error: 'Type must be LENT or BORROWED' }),
     person: z.string().optional(),
     personName: z.string().optional(),
-    amount: z.number().positive('Amount must be greater than 0'),
+    amount: z.coerce.number().positive('Amount must be greater than 0'),
     dueDate: z.string().optional()
   }).refine(data => data.person || data.personName, {
     message: "Person name is required",
@@ -19,7 +19,7 @@ export const settleDebtSchema = z.object({
     id: z.string().uuid('Invalid Debt ID'),
   }),
   body: z.object({
-    amount: z.number().positive('Amount must be greater than 0'),
+    amount: z.coerce.number().positive('Amount must be greater than 0'),
     assetId: z.string().uuid('Invalid Asset ID')
   })
 });
@@ -33,7 +33,7 @@ export const updateDebtSchema = z.object({
     type: z.enum(['LENT', 'BORROWED']).optional(),
     person: z.string().optional(),
     personName: z.string().optional(),
-    amount: z.number().positive('Amount must be greater than 0').optional(),
+    amount: z.coerce.number().positive('Amount must be greater than 0').optional(),
     dueDate: z.string().optional().nullable()
   })
 });
