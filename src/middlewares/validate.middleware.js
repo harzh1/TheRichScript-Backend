@@ -15,7 +15,7 @@ export const validate = (schema) => (req, res, next) => {
     
     next();
   } catch (err) {
-    if (err instanceof ZodError) {
+    if (err instanceof ZodError || err?.name === 'ZodError') {
       const errorMessages = err.errors.map((e) => `${e.path.join('.')} - ${e.message}`).join(', ');
       return res.status(400).json({
         success: false,
@@ -23,6 +23,7 @@ export const validate = (schema) => (req, res, next) => {
         details: err.errors
       });
     }
-    return res.status(500).json({ success: false, error: 'Internal validation error' });
+    console.error('INTERNAL VALIDATION ERROR:', err);
+    return res.status(500).json({ success: false, error: 'Internal validation error: ' + (err.message || 'Unknown error') });
   }
 };
