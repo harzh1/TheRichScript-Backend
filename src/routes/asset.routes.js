@@ -1,5 +1,5 @@
 import express from 'express';
-import { getAssets, createAsset, updateAsset, deleteAsset } from '../controllers/asset.controller.js';
+import { getAssets, createAsset, updateAsset, deleteAsset, getAssetTypes } from '../controllers/asset.controller.js';
 import { protect } from '../middlewares/auth.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import { createAssetSchema, updateAssetSchema, assetIdParamSchema } from '../validations/asset.schema.js';
@@ -10,6 +10,9 @@ router.use(protect);
 router.route('/')
     .get(getAssets)
     .post(validate(createAssetSchema), createAsset);
+
+router.route('/types')
+    .get(getAssetTypes);
 
 router.route('/:id')
     .put(validate(updateAssetSchema), updateAsset)

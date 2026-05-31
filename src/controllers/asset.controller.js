@@ -73,3 +73,18 @@ export const deleteAsset = async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 };
+
+export const getAssetTypes = async (req, res) => {
+    try {
+        // Find distinct asset types for the user
+        const assets = await prisma.asset.findMany({
+            where: { userId: req.user.userId },
+            select: { type: true },
+            distinct: ['type']
+        });
+        const types = assets.map(a => a.type).filter(Boolean);
+        res.status(200).json({ success: true, data: types });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
