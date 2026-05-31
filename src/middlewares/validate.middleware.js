@@ -9,9 +9,13 @@ export const validate = (schema) => (req, res, next) => {
     });
     
     // Replace req properties with validated ones if defined in schema
-    req.body = parsed.body !== undefined ? parsed.body : req.body;
-    req.query = parsed.query !== undefined ? parsed.query : req.query;
-    req.params = parsed.params !== undefined ? parsed.params : req.params;
+    if (parsed.body !== undefined) req.body = parsed.body;
+    if (parsed.query !== undefined) {
+      Object.defineProperty(req, 'query', { value: parsed.query, configurable: true, writable: true });
+    }
+    if (parsed.params !== undefined) {
+      Object.defineProperty(req, 'params', { value: parsed.params, configurable: true, writable: true });
+    }
     
     next();
   } catch (err) {
