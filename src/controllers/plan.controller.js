@@ -52,7 +52,7 @@ export const updatePlan = async (req, res) => {
         });
 
         if (plan.count === 0) {
-            return res.status(404).json({ success: false, error: 'Plan not found' });
+            return res.status(404).json({ success: false, error: 'Plan not found or already deleted' });
         }
 
         const updatedPlan = await prisma.plannedExpense.findUnique({ where: { id } });
@@ -71,7 +71,7 @@ export const deletePlan = async (req, res) => {
         });
 
         if (deleted.count === 0) {
-            return res.status(404).json({ success: false, error: 'Plan not found' });
+            return res.status(404).json({ success: false, error: 'Plan not found or already deleted' });
         }
 
         res.status(200).json({ success: true, message: 'Plan deleted' });

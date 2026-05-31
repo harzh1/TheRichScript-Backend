@@ -46,7 +46,7 @@ export const updateAsset = async (req, res) => {
         });
 
         if (asset.count === 0) {
-            return res.status(404).json({ success: false, error: 'Asset not found or unauthorized' });
+            return res.status(404).json({ success: false, error: 'Asset not found or already deleted' });
         }
 
         const updatedAsset = await prisma.asset.findUnique({ where: { id } });
@@ -65,7 +65,7 @@ export const deleteAsset = async (req, res) => {
         });
 
         if (deleted.count === 0) {
-            return res.status(404).json({ success: false, error: 'Asset not found or unauthorized' });
+            return res.status(404).json({ success: false, error: 'Asset not found or already deleted' });
         }
 
         res.status(200).json({ success: true, message: 'Asset deleted successfully' });

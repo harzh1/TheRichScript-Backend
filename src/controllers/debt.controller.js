@@ -59,6 +59,9 @@ export const settleDebt = async (req, res) => {
         const result = await prisma.$transaction(async (tx) => {
             const debt = await tx.debt.findUnique({ where: { id, userId: req.user.userId } });
             if (!debt) throw new Error('Debt not found');
+            if (debt.status === 'SETTLED') throw new Error('Debt is already fully settled');
+            if (debt.status === 'EXPIRED') throw new Error('Cannot settle a written-off debt');
+            if (parsedAmount > (debt.amount - debt.settledAmount)) throw new Error('Settle amount exceeds remaining balance');
 
             const newSettledAmount = debt.settledAmount + parsedAmount;
             const status = newSettledAmount >= debt.amount ? 'SETTLED' : 'ACTIVE';
@@ -85,6 +88,9 @@ export const settleDebt = async (req, res) => {
 
         res.status(200).json({ success: true, data: result });
     } catch (error) {
+        if (error.message === 'Debt is already fully settled' || error.message === 'Cannot settle a written-off debt' || error.message === 'Settle amount exceeds remaining balance' || error.message === 'Debt not found') {
+            return res.status(400).json({ success: false, error: error.message });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -93,14 +99,25 @@ export const writeOffDebt = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const updatedDebt = await prisma.debt.updateMany({
-            where: { id, userId: req.user.userId },
-            data: { status: 'EXPIRED' }
+        const debt = await prisma.debt.findUnique({
+            where: { id, userId: req.user.userId }
         });
 
-        if (updatedDebt.count === 0) {
+        if (!debt) {
             return res.status(404).json({ success: false, error: 'Debt not found' });
         }
+
+        if (debt.status === 'EXPIRED') {
+            return res.status(400).json({ success: false, error: 'Debt was already written off' });
+        }
+        if (debt.status === 'SETTLED') {
+            return res.status(400).json({ success: false, error: 'Cannot write off a fully settled debt' });
+        }
+
+        const updatedDebt = await prisma.debt.update({
+            where: { id },
+            data: { status: 'EXPIRED' }
+        });
 
         res.status(200).json({ success: true, message: 'Debt written off successfully' });
     } catch (error) {

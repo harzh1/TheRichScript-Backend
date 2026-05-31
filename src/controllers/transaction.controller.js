@@ -72,7 +72,11 @@ export const createTransaction = async (req, res) => {
             const asset = await tx.asset.findUnique({ where: { id: assetId, userId: req.user.userId } });
             
             if (!asset) {
-                throw new Error('Asset not found or unauthorized');
+                throw new Error('Asset not found or already deleted');
+            }
+
+            if (type.toUpperCase() === 'EXPENSE' && asset.value < parsedAmount) {
+                throw new Error('Insufficient funds in the selected asset');
             }
 
             const newBalance = type.toUpperCase() === 'INCOME' 
@@ -90,6 +94,9 @@ export const createTransaction = async (req, res) => {
         res.status(201).json({ success: true, data: result });
     } catch (error) {
         console.error('TRANSACTION ERROR:', error);
+        if (error.message === 'Asset not found or already deleted' || error.message === 'Insufficient funds in the selected asset') {
+            return res.status(400).json({ success: false, error: error.message });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -103,7 +110,7 @@ export const deleteTransaction = async (req, res) => {
         });
 
         if (!transaction) {
-            return res.status(404).json({ success: false, error: 'Transaction not found' });
+            return res.status(404).json({ success: false, error: 'Transaction not found or already deleted' });
         }
 
         await prisma.$transaction(async (tx) => {

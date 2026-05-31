@@ -114,7 +114,11 @@ export const addFundsToGoal = async (req, res) => {
         });
 
         if (!goal) {
-            return res.status(404).json({ success: false, error: 'Goal not found' });
+            return res.status(404).json({ success: false, error: 'Goal not found or already deleted' });
+        }
+
+        if (goal.currentAmount >= goal.targetAmount) {
+            return res.status(400).json({ success: false, error: 'Goal is already fully funded' });
         }
 
         const newAmount = Math.min(goal.targetAmount, goal.currentAmount + parseFloat(amount));
@@ -158,7 +162,7 @@ export const updateGoal = async (req, res) => {
         });
 
         if (goal.count === 0) {
-            return res.status(404).json({ success: false, error: 'Goal not found or unauthorized' });
+            return res.status(404).json({ success: false, error: 'Goal not found or already deleted' });
         }
 
         const updatedGoal = await prisma.goal.findUnique({ where: { id } });
@@ -178,7 +182,7 @@ export const deleteGoal = async (req, res) => {
         });
 
         if (!goal) {
-            return res.status(404).json({ success: false, error: 'Goal not found or unauthorized' });
+            return res.status(404).json({ success: false, error: 'Goal not found or already deleted' });
         }
 
         if (goal.currentAmount > 0) {

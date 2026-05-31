@@ -5,7 +5,7 @@ import { config } from '../config/config.js';
 
 export const register = async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        const { firstName, lastName, email, password } = req.body;
 
         const existingUser = await prisma.user.findUnique({ where: { email } });
         if (existingUser) {
@@ -16,7 +16,8 @@ export const register = async (req, res) => {
 
         const user = await prisma.user.create({
             data: {
-                name,
+                firstName,
+                lastName,
                 email,
                 passwordHash: hashedPassword
             }
@@ -28,7 +29,7 @@ export const register = async (req, res) => {
             success: true, 
             message: 'User created successfully', 
             token,
-            user: { id: user.id, email: user.email, name: user.name } 
+            user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName } 
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -49,7 +50,7 @@ export const login = async (req, res) => {
         res.status(200).json({
             success: true,
             token,
-            user: { id: user.id, email: user.email, name: user.name }
+            user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName }
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -62,7 +63,7 @@ export const getMe = async (req, res) => {
         if (!user) {
             return res.status(404).json({ success: false, error: 'User not found.' });
         }
-        res.status(200).json({ success: true, user: { id: user.id, email: user.email, name: user.name } });
+        res.status(200).json({ success: true, user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
