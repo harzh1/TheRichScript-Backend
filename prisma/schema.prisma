@@ -1,0 +1,157 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email          String   @unique
+  passwordHash   String
+  telegramChatId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  assets         Asset[]
+  transactions   Transaction[]
+  categoryLimits CategoryLimit[]
+  userCategories UserCategory[]
+  plannedExpenses PlannedExpense[]
+  goals          Goal[]
+  debts          Debt[]
+}
+
+model Asset {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  type      String
+  value     Float
+  quantity  Float?   // Optional, mainly for crypto
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions    Transaction[]
+  plannedExpenses PlannedExpense[]
+  debts           Debt[]
+  goals           Goal[]
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+model Transaction {
+  id              String          @id @default(uuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assetId         String
+  asset           Asset           @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  type            TransactionType
+  amount          Float
+  category        String
+  description     String
+  date            DateTime
+  receiptImageUrl String?
+  createdAt       DateTime        @default(now())
+}
+
+model CategoryLimit {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categoryName String
+  monthlyLimit Float?
+  yearlyLimit  Float?
+  createdAt    DateTime @default(now())
+
+  @@unique([userId, categoryName])
+}
+
+model UserCategory {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  createdAt    DateTime @default(now())
+
+  @@unique([userId, name])
+}
+
+enum PlannedExpenseType {
+  MANUAL
+  RECURRING
+}
+
+enum Frequency {
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+model PlannedExpense {
+  id          String             @id @default(uuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assetId     String
+  asset       Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  name        String
+  category    String
+  amount      Float
+  type        PlannedExpenseType
+  frequency   Frequency?
+  nextDueDate DateTime?
+  lastFundedAt DateTime?
+  createdAt   DateTime           @default(now())
+}
+
+model Goal {
+  id                 String     @id @default(uuid())
+  userId             String
+  user               User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name               String
+  targetAmount       Float
+  currentAmount      Float      @default(0)
+  expectedDate       DateTime
+  isPinned           Boolean    @default(false)
+  recurringAmount    Float?
+  recurringFrequency String?
+  sourceAssetId      String?
+  sourceAsset        Asset?     @relation(fields: [sourceAssetId], references: [id])
+  lastFundedAt       DateTime?
+  imageUrls          String[]   @default([])
+  createdAt          DateTime   @default(now())
+}
+
+enum DebtType {
+  LENT
+  BORROWED
+}
+
+enum DebtStatus {
+  ACTIVE
+  SETTLED
+  EXPIRED
+}
+
+model Debt {
+  id            String     @id @default(uuid())
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assetId       String
+  asset         Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  type          DebtType
+  personName    String
+  amount        Float
+  settledAmount Float      @default(0)
+  dueDate       DateTime
+  status        DebtStatus @default(ACTIVE)
+  createdAt     DateTime   @default(now())
+}
