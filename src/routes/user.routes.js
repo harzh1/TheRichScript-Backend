@@ -1,10 +1,10 @@
 import express from 'express';
 import { updateSettings } from '../controllers/user.controller.js';
-import { authMiddleware } from '../middlewares/auth.middleware.js';
+import { protect } from '../middlewares/auth.middleware.js';
 
 const router = express.Router();
 
-router.use(authMiddleware);
+router.use(protect);
 
 router.put('/settings', updateSettings);
 
