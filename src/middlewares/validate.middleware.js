@@ -20,11 +20,12 @@ export const validate = (schema) => (req, res, next) => {
     next();
   } catch (err) {
     if (err instanceof ZodError || err?.name === 'ZodError') {
-      const errorMessages = err.errors.map((e) => `${e.path.join('.')} - ${e.message}`).join(', ');
+      const issues = err.issues || err.errors || [];
+      const errorMessages = issues.map((e) => `${(e.path || []).join('.')} - ${e.message}`).join(', ');
       return res.status(400).json({
         success: false,
         error: errorMessages,
-        details: err.errors
+        details: issues
       });
     }
     console.error('INTERNAL VALIDATION ERROR:', err);

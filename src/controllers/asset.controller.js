@@ -88,3 +88,76 @@ export const getAssetTypes = async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 };
+
+export const transferAsset = async (req, res) => {
+    try {
+        const { fromAssetId, toAssetId, amount, date, description } = req.body;
+        const transferAmount = parseFloat(amount);
+
+        if (fromAssetId === toAssetId) {
+            return res.status(400).json({ success: false, error: 'Source and destination assets must be different' });
+        }
+
+        const result = await prisma.$transaction(async (tx) => {
+            const fromAsset = await tx.asset.findUnique({ where: { id: fromAssetId, userId: req.user.userId } });
+            const toAsset = await tx.asset.findUnique({ where: { id: toAssetId, userId: req.user.userId } });
+
+            if (!fromAsset || !toAsset) {
+                throw new Error('One or both assets not found');
+            }
+
+            if (fromAsset.value < transferAmount) {
+                throw new Error('Insufficient funds in source asset');
+            }
+
+            // Update balances
+            await tx.asset.update({
+                where: { id: fromAssetId },
+                data: { value: fromAsset.value - transferAmount }
+            });
+
+            await tx.asset.update({
+                where: { id: toAssetId },
+                data: { value: toAsset.value + transferAmount }
+            });
+
+            const transferDate = date ? new Date(date) : new Date();
+            const transferDesc = description || `Transfer to ${toAsset.name}`;
+            const receiveDesc = description || `Transfer from ${fromAsset.name}`;
+
+            // Create dual transactions
+            const txOut = await tx.transaction.create({
+                data: {
+                    userId: req.user.userId,
+                    assetId: fromAssetId,
+                    type: 'EXPENSE',
+                    amount: transferAmount,
+                    category: 'TRANSFER OUT',
+                    description: transferDesc,
+                    date: transferDate
+                }
+            });
+
+            const txIn = await tx.transaction.create({
+                data: {
+                    userId: req.user.userId,
+                    assetId: toAssetId,
+                    type: 'INCOME',
+                    amount: transferAmount,
+                    category: 'TRANSFER IN',
+                    description: receiveDesc,
+                    date: transferDate
+                }
+            });
+
+            return { txOut, txIn };
+        });
+
+        res.status(200).json({ success: true, data: result });
+    } catch (error) {
+        if (error.message === 'One or both assets not found' || error.message === 'Insufficient funds in source asset') {
+            return res.status(400).json({ success: false, error: error.message });
+        }
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
