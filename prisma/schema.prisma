@@ -44,7 +44,8 @@ model Asset {
   plannedExpensesSource PlannedExpense[] @relation("SourceAsset")
   plannedExpensesTarget PlannedExpense[] @relation("TargetAsset")
   debts           Debt[]
-  goals           Goal[]
+  goalsSource     Goal[] @relation("GoalSourceAsset")
+  goalsTarget     Goal[] @relation("GoalTargetAsset")
 }
 
 enum TransactionType {
@@ -131,7 +132,9 @@ model Goal {
   recurringAmount    Float?
   recurringFrequency String?
   sourceAssetId      String?
-  sourceAsset        Asset?     @relation(fields: [sourceAssetId], references: [id])
+  sourceAsset        Asset?     @relation(name: "GoalSourceAsset", fields: [sourceAssetId], references: [id])
+  targetAssetId      String?
+  targetAsset        Asset?     @relation(name: "GoalTargetAsset", fields: [targetAssetId], references: [id], onDelete: SetNull)
   lastFundedAt       DateTime?
   imageUrls          String[]   @default([])
   createdAt          DateTime   @default(now())

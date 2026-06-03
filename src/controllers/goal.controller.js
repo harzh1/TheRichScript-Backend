@@ -13,7 +13,7 @@ export const getGoals = async (req, res) => {
 
 export const createGoal = async (req, res) => {
     try {
-        const { name, targetAmount, initialDeposit, assetId, expectedDate, recurringAmount, recurringFrequency, sourceAssetId, imageUrls } = req.body;
+        const { name, targetAmount, initialDeposit, assetId, expectedDate, recurringAmount, recurringFrequency, sourceAssetId, targetAssetId, imageUrls } = req.body;
         
         let urls = [];
         if (imageUrls) {
@@ -57,6 +57,7 @@ export const createGoal = async (req, res) => {
                         ...(recurringAmount && { recurringAmount: parseFloat(recurringAmount) }),
                         ...(recurringFrequency && { recurringFrequency: recurringFrequency.toUpperCase() }),
                         ...(sourceAssetId && { sourceAssetId }),
+                        ...(targetAssetId && { targetAssetId }),
                         ...(urls.length > 0 && { imageUrls: urls })
                     }
                 });
@@ -67,18 +68,40 @@ export const createGoal = async (req, res) => {
                     data: { value: asset.value - depositAmount }
                 });
 
-                // 3. Log the transaction as an expense towards the goal
+                // 3. Log the transaction as an expense towards the goal (or transfer out)
                 await tx.transaction.create({
                     data: {
                         userId: req.user.userId,
                         assetId,
                         type: 'EXPENSE',
                         amount: depositAmount,
-                        category: 'GOAL FUNDING',
+                        category: targetAssetId ? 'TRANSFER OUT' : 'GOAL FUNDING',
                         description: `Initial deposit for goal: ${name}`,
                         date: new Date()
                     }
                 });
+
+                // 4. If targetAssetId exists, add to it and log INCOME
+                if (targetAssetId) {
+                    const targetAsset = await tx.asset.findUnique({ where: { id: targetAssetId, userId: req.user.userId } });
+                    if (targetAsset) {
+                        await tx.asset.update({
+                            where: { id: targetAssetId },
+                            data: { value: targetAsset.value + depositAmount }
+                        });
+                        await tx.transaction.create({
+                            data: {
+                                userId: req.user.userId,
+                                assetId: targetAssetId,
+                                type: 'INCOME',
+                                amount: depositAmount,
+                                category: 'TRANSFER IN',
+                                description: `Goal funding received: ${name}`,
+                                date: new Date()
+                            }
+                        });
+                    }
+                }
 
                 return newGoal;
             });
@@ -93,6 +116,7 @@ export const createGoal = async (req, res) => {
                     ...(recurringAmount && { recurringAmount: parseFloat(recurringAmount) }),
                     ...(recurringFrequency && { recurringFrequency: recurringFrequency.toUpperCase() }),
                     ...(sourceAssetId && { sourceAssetId }),
+                    ...(targetAssetId && { targetAssetId }),
                     ...(urls.length > 0 && { imageUrls: urls })
                 }
             });
@@ -107,7 +131,9 @@ export const createGoal = async (req, res) => {
 export const addFundsToGoal = async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount } = req.body;
+        const { amount, assetId } = req.body;
+
+        const fundAmount = parseFloat(amount);
 
         const goal = await prisma.goal.findUnique({
             where: { id, userId: req.user.userId }
@@ -121,11 +147,61 @@ export const addFundsToGoal = async (req, res) => {
             return res.status(400).json({ success: false, error: 'Goal is already fully funded' });
         }
 
-        const newAmount = Math.min(goal.targetAmount, goal.currentAmount + parseFloat(amount));
+        const sourceAsset = await prisma.asset.findUnique({
+            where: { id: assetId, userId: req.user.userId }
+        });
 
-        const updatedGoal = await prisma.goal.update({
-            where: { id },
-            data: { currentAmount: newAmount }
+        if (!sourceAsset || sourceAsset.value < fundAmount) {
+            return res.status(400).json({ success: false, error: 'Source asset not found or insufficient funds' });
+        }
+
+        const newAmount = Math.min(goal.targetAmount, goal.currentAmount + fundAmount);
+        const actualDeposit = newAmount - goal.currentAmount;
+
+        const updatedGoal = await prisma.$transaction(async (tx) => {
+            const g = await tx.goal.update({
+                where: { id },
+                data: { currentAmount: newAmount }
+            });
+
+            await tx.asset.update({
+                where: { id: assetId },
+                data: { value: sourceAsset.value - actualDeposit }
+            });
+
+            await tx.transaction.create({
+                data: {
+                    userId: req.user.userId,
+                    assetId,
+                    type: 'EXPENSE',
+                    amount: actualDeposit,
+                    category: goal.targetAssetId ? 'TRANSFER OUT' : 'GOAL FUNDING',
+                    description: `Added funds to goal: ${goal.name}`,
+                    date: new Date()
+                }
+            });
+
+            if (goal.targetAssetId) {
+                const tAsset = await tx.asset.findUnique({ where: { id: goal.targetAssetId } });
+                if (tAsset) {
+                    await tx.asset.update({
+                        where: { id: goal.targetAssetId },
+                        data: { value: tAsset.value + actualDeposit }
+                    });
+                    await tx.transaction.create({
+                        data: {
+                            userId: req.user.userId,
+                            assetId: goal.targetAssetId,
+                            type: 'INCOME',
+                            amount: actualDeposit,
+                            category: 'TRANSFER IN',
+                            description: `Goal funding received: ${goal.name}`,
+                            date: new Date()
+                        }
+                    });
+                }
+            }
+            return g;
         });
 
         res.status(200).json({ success: true, data: updatedGoal });
@@ -137,7 +213,7 @@ export const addFundsToGoal = async (req, res) => {
 export const updateGoal = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, targetAmount, expectedDate, recurringAmount, recurringFrequency, isPinned, sourceAssetId, imageUrls } = req.body;
+        const { name, targetAmount, expectedDate, recurringAmount, recurringFrequency, isPinned, sourceAssetId, targetAssetId, imageUrls } = req.body;
         
         let urls = [];
         if (imageUrls !== undefined) {
@@ -157,6 +233,7 @@ export const updateGoal = async (req, res) => {
                 ...(recurringFrequency !== undefined && { recurringFrequency: recurringFrequency ? recurringFrequency.toUpperCase() : null }),
                 ...(isPinned !== undefined && { isPinned: Boolean(isPinned) }),
                 ...(sourceAssetId !== undefined && { sourceAssetId: sourceAssetId || null }),
+                ...(targetAssetId !== undefined && { targetAssetId: targetAssetId || null }),
                 ...(imageUrls !== undefined || (req.files && req.files.length > 0) ? { imageUrls: urls } : {})
             }
         });
@@ -185,7 +262,7 @@ export const deleteGoal = async (req, res) => {
             return res.status(404).json({ success: false, error: 'Goal not found or already deleted' });
         }
 
-        if (goal.currentAmount > 0) {
+        if (goal.currentAmount > 0 && !goal.targetAssetId) {
             if (!refundAssetId) {
                 return res.status(400).json({ success: false, error: 'Refund asset ID is required because the goal has a balance.' });
             }

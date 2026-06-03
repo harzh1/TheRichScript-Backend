@@ -9,6 +9,7 @@ export const createGoalSchema = z.object({
     recurringAmount: z.coerce.number().nonnegative().optional().nullable(),
     recurringFrequency: z.string().optional().nullable(),
     sourceAssetId: z.string().uuid('Invalid Asset ID').optional().nullable(),
+    targetAssetId: z.string().uuid('Invalid Target Asset ID').optional().nullable(),
     imageUrls: z.array(z.string().url()).optional()
   })
 });
@@ -25,6 +26,7 @@ export const updateGoalSchema = z.object({
     recurringAmount: z.coerce.number().nonnegative().optional().nullable(),
     recurringFrequency: z.string().optional().nullable(),
     sourceAssetId: z.string().uuid('Invalid Asset ID').optional().nullable(),
+    targetAssetId: z.string().uuid('Invalid Target Asset ID').optional().nullable(),
     imageUrls: z.array(z.string().url()).optional()
   })
 });
