@@ -5,7 +5,7 @@ import { config } from '../config/config.js';
 
 export const register = async (req, res) => {
     try {
-        const { firstName, lastName, email, password } = req.body;
+        const { firstName, lastName, email, password, country, currency } = req.body;
 
         const existingUser = await prisma.user.findUnique({ where: { email } });
         if (existingUser) {
@@ -19,7 +19,9 @@ export const register = async (req, res) => {
                 firstName,
                 lastName,
                 email,
-                passwordHash: hashedPassword
+                passwordHash: hashedPassword,
+                country: country || 'IN',
+                currency: currency || 'INR'
             }
         });
 
@@ -29,7 +31,7 @@ export const register = async (req, res) => {
             success: true, 
             message: 'User created successfully', 
             token,
-            user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName } 
+            user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, country: user.country, currency: user.currency } 
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -50,7 +52,7 @@ export const login = async (req, res) => {
         res.status(200).json({
             success: true,
             token,
-            user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName }
+            user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, country: user.country, currency: user.currency }
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -63,7 +65,7 @@ export const getMe = async (req, res) => {
         if (!user) {
             return res.status(404).json({ success: false, error: 'User not found.' });
         }
-        res.status(200).json({ success: true, user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName } });
+        res.status(200).json({ success: true, user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, country: user.country, currency: user.currency } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
