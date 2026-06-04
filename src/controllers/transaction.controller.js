@@ -110,26 +110,54 @@ export const deleteTransaction = async (req, res) => {
         });
 
         if (!transaction) {
-            return res.status(404).json({ success: false, error: 'Transaction not found or already deleted' });
+            return res.status(404).json({ success: false, error: 'Unable to delete: Transaction not found.' });
         }
 
-        await prisma.$transaction(async (tx) => {
-            // Revert asset balance
-            const asset = await tx.asset.findUnique({ where: { id: transaction.assetId } });
-            if (asset) {
-                const revertedBalance = transaction.type === 'INCOME'
-                    ? asset.value - transaction.amount
-                    : asset.value + transaction.amount;
-                
+        const asset = await prisma.asset.findUnique({ where: { id: transaction.assetId } });
+        if (!asset) {
+            return res.status(400).json({ success: false, error: 'Unable to delete: The associated asset no longer exists.' });
+        }
+
+        if (transaction.type === 'TRANSFER') {
+            if (!transaction.toAssetId) {
+                return res.status(400).json({ success: false, error: 'Unable to delete: Transfer transaction missing target asset.' });
+            }
+            const targetAsset = await prisma.asset.findUnique({ where: { id: transaction.toAssetId } });
+            if (!targetAsset) {
+                return res.status(400).json({ success: false, error: 'Unable to delete: The target asset no longer exists.' });
+            }
+            if (targetAsset.value < transaction.amount) {
+                return res.status(400).json({ success: false, error: 'Unable to delete: Reverting this transfer would result in a negative target asset balance.' });
+            }
+
+            await prisma.$transaction(async (tx) => {
+                await tx.asset.update({
+                    where: { id: transaction.assetId },
+                    data: { value: asset.value + transaction.amount }
+                });
+                await tx.asset.update({
+                    where: { id: transaction.toAssetId },
+                    data: { value: targetAsset.value - transaction.amount }
+                });
+                await tx.transaction.delete({ where: { id } });
+            });
+        } else {
+            const revertedBalance = transaction.type === 'INCOME'
+                ? asset.value - transaction.amount
+                : asset.value + transaction.amount;
+            
+            if (transaction.type === 'INCOME' && revertedBalance < 0) {
+                return res.status(400).json({ success: false, error: 'Unable to delete: Reverting this income would result in a negative asset balance.' });
+            }
+
+            await prisma.$transaction(async (tx) => {
                 await tx.asset.update({
                     where: { id: transaction.assetId },
                     data: { value: revertedBalance }
                 });
-            }
-
-            // Delete transaction
-            await tx.transaction.delete({ where: { id } });
-        });
+                await tx.transaction.delete({ where: { id } });
+            });
+        }
 
         res.status(200).json({ success: true, message: 'Transaction deleted successfully' });
     } catch (error) {

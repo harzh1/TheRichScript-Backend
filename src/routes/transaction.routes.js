@@ -3,7 +3,7 @@ import { getTransactions, createTransaction, deleteTransaction } from '../contro
 import { protect } from '../middlewares/auth.middleware.js';
 import { upload } from '../config/cloudinary.js';
 import { validate } from '../middlewares/validate.middleware.js';
-import { createTransactionSchema } from '../validations/transaction.schema.js';
+import { createTransactionSchema, transactionIdParamSchema } from '../validations/transaction.schema.js';
 const router = express.Router();
 
 router.use(protect);
@@ -13,6 +13,6 @@ router.route('/')
     .post(upload.single('receipt'), validate(createTransactionSchema), createTransaction);
 
 router.route('/:id')
-    .delete(deleteTransaction);
+    .delete(validate(transactionIdParamSchema), deleteTransaction);
 
 export default router;

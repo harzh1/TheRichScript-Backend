@@ -91,7 +91,7 @@ export const getAssetTypes = async (req, res) => {
 
 export const transferAsset = async (req, res) => {
     try {
-        const { fromAssetId, toAssetId, amount, date, description } = req.body;
+        const { fromAssetId, toAssetId, amount, date, description, category } = req.body;
         const transferAmount = parseFloat(amount);
 
         if (fromAssetId === toAssetId) {
@@ -123,34 +123,22 @@ export const transferAsset = async (req, res) => {
 
             const transferDate = date ? new Date(date) : new Date();
             const transferDesc = description || `Transfer to ${toAsset.name}`;
-            const receiveDesc = description || `Transfer from ${fromAsset.name}`;
 
-            // Create dual transactions
-            const txOut = await tx.transaction.create({
+            // Create a SINGLE transfer transaction for the ledger
+            const transaction = await tx.transaction.create({
                 data: {
                     userId: req.user.userId,
                     assetId: fromAssetId,
-                    type: 'EXPENSE',
+                    toAssetId: toAssetId,
+                    type: 'TRANSFER',
                     amount: transferAmount,
-                    category: 'TRANSFER OUT',
+                    category: category ? category.toUpperCase() : 'TRANSFER',
                     description: transferDesc,
                     date: transferDate
                 }
             });
 
-            const txIn = await tx.transaction.create({
-                data: {
-                    userId: req.user.userId,
-                    assetId: toAssetId,
-                    type: 'INCOME',
-                    amount: transferAmount,
-                    category: 'TRANSFER IN',
-                    description: receiveDesc,
-                    date: transferDate
-                }
-            });
-
-            return { txOut, txIn };
+            return transaction;
         });
 
         res.status(200).json({ success: true, data: result });

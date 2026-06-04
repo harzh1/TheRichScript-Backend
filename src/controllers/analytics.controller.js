@@ -40,19 +40,19 @@ export const getAnalyticsSummary = async (req, res) => {
         
         const allTimeExpenses = await prisma.transaction.groupBy({
             by: ['category'],
-            where: { userId, type: 'EXPENSE' },
+            where: { userId },
             _sum: { amount: true }
         });
 
         const yearlyExpenses = await prisma.transaction.groupBy({
             by: ['category'],
-            where: { userId, type: 'EXPENSE', date: { gte: startOfYear } },
+            where: { userId, date: { gte: startOfYear } },
             _sum: { amount: true }
         });
 
         const monthlyExpenses = await prisma.transaction.groupBy({
             by: ['category'],
-            where: { userId, type: 'EXPENSE', date: { gte: startOfMonth } },
+            where: { userId, date: { gte: startOfMonth } },
             _sum: { amount: true }
         });
 

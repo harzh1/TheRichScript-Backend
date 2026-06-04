@@ -32,6 +32,7 @@ export const transferAssetSchema = z.object({
     fromAssetId: z.string().uuid('Invalid source asset ID'),
     toAssetId: z.string().uuid('Invalid destination asset ID'),
     amount: z.coerce.number().min(0.01, 'Transfer amount must be positive'),
+    category: z.string().optional(),
     date: z.string().optional(),
     description: z.string().optional()
   })

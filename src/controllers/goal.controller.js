@@ -68,20 +68,6 @@ export const createGoal = async (req, res) => {
                     data: { value: asset.value - depositAmount }
                 });
 
-                // 3. Log the transaction as an expense towards the goal (or transfer out)
-                await tx.transaction.create({
-                    data: {
-                        userId: req.user.userId,
-                        assetId,
-                        type: 'EXPENSE',
-                        amount: depositAmount,
-                        category: targetAssetId ? 'TRANSFER OUT' : 'GOAL FUNDING',
-                        description: `Initial deposit for goal: ${name}`,
-                        date: new Date()
-                    }
-                });
-
-                // 4. If targetAssetId exists, add to it and log INCOME
                 if (targetAssetId) {
                     const targetAsset = await tx.asset.findUnique({ where: { id: targetAssetId, userId: req.user.userId } });
                     if (targetAsset) {
@@ -89,18 +75,33 @@ export const createGoal = async (req, res) => {
                             where: { id: targetAssetId },
                             data: { value: targetAsset.value + depositAmount }
                         });
+                        // Single TRANSFER transaction
                         await tx.transaction.create({
                             data: {
                                 userId: req.user.userId,
-                                assetId: targetAssetId,
-                                type: 'INCOME',
+                                assetId,
+                                toAssetId: targetAssetId,
+                                type: 'TRANSFER',
                                 amount: depositAmount,
-                                category: 'TRANSFER IN',
-                                description: `Goal funding received: ${name}`,
+                                category: 'GOAL FUNDING',
+                                description: `Goal funding transfer: ${name}`,
                                 date: new Date()
                             }
                         });
                     }
+                } else {
+                    // Regular EXPENSE for abstract goal
+                    await tx.transaction.create({
+                        data: {
+                            userId: req.user.userId,
+                            assetId,
+                            type: 'EXPENSE',
+                            amount: depositAmount,
+                            category: 'GOAL FUNDING',
+                            description: `Initial deposit for goal: ${name}`,
+                            date: new Date()
+                        }
+                    });
                 }
 
                 return newGoal;
@@ -169,18 +170,6 @@ export const addFundsToGoal = async (req, res) => {
                 data: { value: sourceAsset.value - actualDeposit }
             });
 
-            await tx.transaction.create({
-                data: {
-                    userId: req.user.userId,
-                    assetId,
-                    type: 'EXPENSE',
-                    amount: actualDeposit,
-                    category: goal.targetAssetId ? 'TRANSFER OUT' : 'GOAL FUNDING',
-                    description: `Added funds to goal: ${goal.name}`,
-                    date: new Date()
-                }
-            });
-
             if (goal.targetAssetId) {
                 const tAsset = await tx.asset.findUnique({ where: { id: goal.targetAssetId } });
                 if (tAsset) {
@@ -191,15 +180,28 @@ export const addFundsToGoal = async (req, res) => {
                     await tx.transaction.create({
                         data: {
                             userId: req.user.userId,
-                            assetId: goal.targetAssetId,
-                            type: 'INCOME',
+                            assetId,
+                            toAssetId: goal.targetAssetId,
+                            type: 'TRANSFER',
                             amount: actualDeposit,
-                            category: 'TRANSFER IN',
-                            description: `Goal funding received: ${goal.name}`,
+                            category: 'GOAL FUNDING',
+                            description: `Goal funding transfer: ${goal.name}`,
                             date: new Date()
                         }
                     });
                 }
+            } else {
+                await tx.transaction.create({
+                    data: {
+                        userId: req.user.userId,
+                        assetId,
+                        type: 'EXPENSE',
+                        amount: actualDeposit,
+                        category: 'GOAL FUNDING',
+                        description: `Added funds to goal: ${goal.name}`,
+                        date: new Date()
+                    }
+                });
             }
             return g;
         });

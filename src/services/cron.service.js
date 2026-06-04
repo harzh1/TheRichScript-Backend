@@ -60,17 +60,39 @@ const processAutoFunding = async () => {
                             }
                         });
 
-                        await tx.transaction.create({
-                            data: {
-                                userId: goal.userId,
-                                assetId: asset.id,
-                                type: 'EXPENSE',
-                                amount: fundAmount,
-                                category: 'GOAL FUNDING',
-                                description: `Auto-funding for goal: ${goal.name}`,
-                                date: now
+                        if (goal.targetAssetId) {
+                            const targetAsset = await tx.asset.findUnique({ where: { id: goal.targetAssetId } });
+                            if (targetAsset) {
+                                await tx.asset.update({
+                                    where: { id: goal.targetAssetId },
+                                    data: { value: targetAsset.value + fundAmount }
+                                });
                             }
-                        });
+                            await tx.transaction.create({
+                                data: {
+                                    userId: goal.userId,
+                                    assetId: asset.id,
+                                    toAssetId: goal.targetAssetId,
+                                    type: 'TRANSFER',
+                                    amount: fundAmount,
+                                    category: 'GOAL FUNDING',
+                                    description: `Auto-funding transfer for goal: ${goal.name}`,
+                                    date: now
+                                }
+                            });
+                        } else {
+                            await tx.transaction.create({
+                                data: {
+                                    userId: goal.userId,
+                                    assetId: asset.id,
+                                    type: 'EXPENSE',
+                                    amount: fundAmount,
+                                    category: 'GOAL FUNDING',
+                                    description: `Auto-funding for goal: ${goal.name}`,
+                                    date: now
+                                }
+                            });
+                        }
                     });
                     console.log(`[CRON] Successfully auto-funded goal: ${goal.name} with amount ${fundAmount}`);
                 } else {
@@ -136,21 +158,11 @@ const processRecurringPlans = async () => {
                             data: {
                                 userId: plan.userId,
                                 assetId: asset.id,
-                                type: 'EXPENSE',
+                                toAssetId: targetAsset.id,
+                                type: 'TRANSFER',
                                 amount: plan.amount,
-                                category: 'TRANSFER OUT',
-                                description: `Transfer to ${targetAsset.name} (${plan.name})`,
-                                date: now
-                            }
-                        });
-                        await tx.transaction.create({
-                            data: {
-                                userId: plan.userId,
-                                assetId: targetAsset.id,
-                                type: 'INCOME',
-                                amount: plan.amount,
-                                category: 'TRANSFER IN',
-                                description: `Transfer from ${asset.name} (${plan.name})`,
+                                category: plan.category || 'TRANSFER',
+                                description: `Auto-transfer: ${plan.name}`,
                                 date: now
                             }
                         });

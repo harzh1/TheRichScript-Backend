@@ -11,3 +11,9 @@ export const createTransactionSchema = z.object({
     receiptImageUrl: z.string().url().optional().nullable()
   })
 });
+
+export const transactionIdParamSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid Transaction ID')
+  })
+});

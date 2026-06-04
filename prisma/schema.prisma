@@ -46,11 +46,13 @@ model Asset {
   debts           Debt[]
   goalsSource     Goal[] @relation("GoalSourceAsset")
   goalsTarget     Goal[] @relation("GoalTargetAsset")
+  transactionsTarget Transaction[] @relation("TransactionTargetAsset")
 }
 
 enum TransactionType {
   INCOME
   EXPENSE
+  TRANSFER
 }
 
 model Transaction {
@@ -59,6 +61,8 @@ model Transaction {
   user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   assetId         String
   asset           Asset           @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  toAssetId       String?
+  toAsset         Asset?          @relation(fields: [toAssetId], references: [id], onDelete: Cascade, name: "TransactionTargetAsset")
   type            TransactionType
   amount          Float
   category        String
