@@ -10,6 +10,10 @@ export const runAllCronJobs = async () => {
 const processAutoFunding = async () => {
     try {
         const now = new Date();
+        // Add a 14-hour buffer to account for extreme timezones (like +14)
+        // so that if the external trigger fires at local midnight, 
+        // the server (in UTC) will correctly pick up today's UTC midnight targets.
+        const targetDate = new Date(now.getTime() + 14 * 60 * 60 * 1000);
         
         // Process Goals
         const goals = await prisma.goal.findMany({
@@ -30,6 +34,7 @@ const processAutoFunding = async () => {
                 const diffTime = Math.abs(now - goal.lastFundedAt);
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
                 
+                if (goal.recurringFrequency === 'DAILY' && diffDays >= 1) isDue = true;
                 if (goal.recurringFrequency === 'WEEKLY' && diffDays >= 7) isDue = true;
                 if (goal.recurringFrequency === 'MONTHLY' && diffDays >= 30) isDue = true;
                 if (goal.recurringFrequency === 'YEARLY' && diffDays >= 365) isDue = true;
@@ -104,10 +109,12 @@ const processAutoFunding = async () => {
 const processRecurringPlans = async () => {
     try {
         const now = new Date();
+        const targetDate = new Date(now.getTime() + 14 * 60 * 60 * 1000);
+
         const plans = await prisma.plannedExpense.findMany({
             where: {
                 type: 'RECURRING',
-                nextDueDate: { lte: now }
+                nextDueDate: { lte: targetDate }
             }
         });
 
