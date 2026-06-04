@@ -1,14 +1,10 @@
-import cron from 'node-cron';
 import prisma from '../config/db.js';
 
-export const initCronJobs = () => {
-    // Run every day at midnight (0 0 * * *)
-    cron.schedule('0 0 * * *', async () => {
-        console.log('Running daily auto-funding task...');
-        await processAutoFunding();
-        console.log('Running daily recurring plans task...');
-        await processRecurringPlans();
-    });
+export const runAllCronJobs = async () => {
+    console.log('Running auto-funding task...');
+    await processAutoFunding();
+    console.log('Running recurring plans task...');
+    await processRecurringPlans();
 };
 
 const processAutoFunding = async () => {
