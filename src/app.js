@@ -9,6 +9,7 @@ import goalRoutes from './routes/goal.routes.js';
 import debtRoutes from './routes/debt.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import userRoutes from './routes/user.routes.js';
+import cronRoutes from './routes/cron.routes.js';
 import { initTelegramBot } from './services/telegram.service.js';
 
 const app = express();
@@ -39,6 +40,7 @@ app.use('/api/goals', goalRoutes);
 app.use('/api/debts', debtRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/cron', cronRoutes);
 
 app.use((err, req, res, next) => {
     console.error('[Global Error]', err.stack);
