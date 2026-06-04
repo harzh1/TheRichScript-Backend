@@ -3,7 +3,7 @@ import { runAllCronJobs } from '../services/cron.service.js';
 
 const router = express.Router();
 
-router.post('/run', async (req, res) => {
+router.all('/run', async (req, res) => {
     try {
         const secret = req.headers['x-cron-secret'] || req.query.secret;
         
