@@ -1,11 +1,21 @@
 import prisma from '../config/db.js';
+import { resolveCategoryId } from './category.controller.js';
 
 export const getGoals = async (req, res) => {
     try {
         const goals = await prisma.goal.findMany({
-            where: { userId: req.user.userId }
+            where: { userId: req.user.userId },
+            include: { images: true }
         });
-        res.status(200).json({ success: true, data: goals });
+
+        // Flatten images for frontend compatibility
+        const flatGoals = goals.map(goal => ({
+            ...goal,
+            imageUrls: goal.images.map(img => img.url),
+            images: undefined
+        }));
+
+        res.status(200).json({ success: true, data: flatGoals });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -32,7 +42,6 @@ export const createGoal = async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Asset ID is required for an initial deposit.' });
             }
 
-            // Verify asset exists and has enough balance
             const asset = await prisma.asset.findUnique({
                 where: { id: assetId, userId: req.user.userId }
             });
@@ -46,7 +55,8 @@ export const createGoal = async (req, res) => {
             }
 
             goal = await prisma.$transaction(async (tx) => {
-                // 1. Create the goal
+                const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL FUNDING');
+
                 const newGoal = await tx.goal.create({
                     data: {
                         userId: req.user.userId,
@@ -58,11 +68,11 @@ export const createGoal = async (req, res) => {
                         ...(recurringFrequency && { recurringFrequency: recurringFrequency.toUpperCase() }),
                         ...(sourceAssetId && { sourceAssetId }),
                         ...(targetAssetId && { targetAssetId }),
-                        ...(urls.length > 0 && { imageUrls: urls })
+                        ...(urls.length > 0 && { images: { create: urls.map(u => ({ url: u })) } })
                     }
                 });
 
-                // 2. Deduct from asset
+                // Deduct from asset
                 await tx.asset.update({
                     where: { id: assetId },
                     data: { value: asset.value - depositAmount }
@@ -75,7 +85,7 @@ export const createGoal = async (req, res) => {
                             where: { id: targetAssetId },
                             data: { value: targetAsset.value + depositAmount }
                         });
-                        // Single TRANSFER transaction
+                        const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL FUNDING');
                         await tx.transaction.create({
                             data: {
                                 userId: req.user.userId,
@@ -83,21 +93,21 @@ export const createGoal = async (req, res) => {
                                 toAssetId: targetAssetId,
                                 type: 'TRANSFER',
                                 amount: depositAmount,
-                                category: 'GOAL FUNDING',
+                                categoryId,
                                 description: `Goal funding transfer: ${name}`,
                                 date: new Date()
                             }
                         });
                     }
                 } else {
-                    // Regular EXPENSE for abstract goal
+                    const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL FUNDING');
                     await tx.transaction.create({
                         data: {
                             userId: req.user.userId,
                             assetId,
                             type: 'EXPENSE',
                             amount: depositAmount,
-                            category: 'GOAL FUNDING',
+                            categoryId,
                             description: `Initial deposit for goal: ${name}`,
                             date: new Date()
                         }
@@ -107,23 +117,36 @@ export const createGoal = async (req, res) => {
                 return newGoal;
             });
         } else {
-            goal = await prisma.goal.create({
-                data: {
-                    userId: req.user.userId,
-                    name,
-                    targetAmount: parseFloat(targetAmount),
-                    currentAmount: 0,
-                    expectedDate: new Date(expectedDate),
-                    ...(recurringAmount && { recurringAmount: parseFloat(recurringAmount) }),
-                    ...(recurringFrequency && { recurringFrequency: recurringFrequency.toUpperCase() }),
-                    ...(sourceAssetId && { sourceAssetId }),
-                    ...(targetAssetId && { targetAssetId }),
-                    ...(urls.length > 0 && { imageUrls: urls })
-                }
+            goal = await prisma.$transaction(async (tx) => {
+                const newGoal = await tx.goal.create({
+                    data: {
+                        userId: req.user.userId,
+                        name,
+                        targetAmount: parseFloat(targetAmount),
+                        currentAmount: 0,
+                        expectedDate: new Date(expectedDate),
+                        ...(recurringAmount && { recurringAmount: parseFloat(recurringAmount) }),
+                        ...(recurringFrequency && { recurringFrequency: recurringFrequency.toUpperCase() }),
+                        ...(sourceAssetId && { sourceAssetId }),
+                        ...(targetAssetId && { targetAssetId }),
+                        ...(urls.length > 0 && { images: { create: urls.map(u => ({ url: u })) } })
+                    }
+                });
+
+                return newGoal;
             });
         }
 
-        res.status(201).json({ success: true, data: goal });
+        // Re-fetch with images for response
+        const fullGoal = await prisma.goal.findUnique({
+            where: { id: goal.id },
+            include: { images: true }
+        });
+
+        res.status(201).json({
+            success: true,
+            data: { ...fullGoal, imageUrls: fullGoal.images.map(img => img.url), images: undefined }
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -177,6 +200,7 @@ export const addFundsToGoal = async (req, res) => {
                         where: { id: goal.targetAssetId },
                         data: { value: tAsset.value + actualDeposit }
                     });
+                    const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL FUNDING');
                     await tx.transaction.create({
                         data: {
                             userId: req.user.userId,
@@ -184,20 +208,21 @@ export const addFundsToGoal = async (req, res) => {
                             toAssetId: goal.targetAssetId,
                             type: 'TRANSFER',
                             amount: actualDeposit,
-                            category: 'GOAL FUNDING',
+                            categoryId,
                             description: `Goal funding transfer: ${goal.name}`,
                             date: new Date()
                         }
                     });
                 }
             } else {
+                const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL FUNDING');
                 await tx.transaction.create({
                     data: {
                         userId: req.user.userId,
                         assetId,
                         type: 'EXPENSE',
                         amount: actualDeposit,
-                        category: 'GOAL FUNDING',
+                        categoryId,
                         description: `Added funds to goal: ${goal.name}`,
                         date: new Date()
                     }
@@ -218,35 +243,56 @@ export const updateGoal = async (req, res) => {
         const { name, targetAmount, expectedDate, recurringAmount, recurringFrequency, isPinned, sourceAssetId, targetAssetId, imageUrls } = req.body;
         
         let urls = [];
-        if (imageUrls !== undefined) {
+        if (imageUrls) {
             urls = Array.isArray(imageUrls) ? imageUrls : [imageUrls];
         }
         if (req.files && req.files.length > 0) {
             urls = urls.concat(req.files.map(f => f.path));
         }
 
-        const goal = await prisma.goal.updateMany({
-            where: { id, userId: req.user.userId },
-            data: {
-                ...(name && { name }),
-                ...(targetAmount !== undefined && { targetAmount: parseFloat(targetAmount) }),
-                ...(expectedDate && { expectedDate: new Date(expectedDate) }),
-                ...(recurringAmount !== undefined && { recurringAmount: recurringAmount ? parseFloat(recurringAmount) : null }),
-                ...(recurringFrequency !== undefined && { recurringFrequency: recurringFrequency ? recurringFrequency.toUpperCase() : null }),
-                ...(isPinned !== undefined && { isPinned: Boolean(isPinned) }),
-                ...(sourceAssetId !== undefined && { sourceAssetId: sourceAssetId || null }),
-                ...(targetAssetId !== undefined && { targetAssetId: targetAssetId || null }),
-                ...(imageUrls !== undefined || (req.files && req.files.length > 0) ? { imageUrls: urls } : {})
+        const result = await prisma.$transaction(async (tx) => {
+            const oldGoal = await tx.goal.findUnique({
+                where: { id, userId: req.user.userId }
+            });
+
+            if (!oldGoal) {
+                throw new Error('Goal not found or already deleted');
             }
+
+            const goal = await tx.goal.update({
+                where: { id },
+                data: {
+                    ...(name && { name }),
+                    ...(targetAmount !== undefined && { targetAmount: parseFloat(targetAmount) }),
+                    ...(expectedDate && { expectedDate: new Date(expectedDate) }),
+                    ...(recurringAmount !== undefined && { recurringAmount: recurringAmount ? parseFloat(recurringAmount) : null }),
+                    ...(recurringFrequency !== undefined && { recurringFrequency: recurringFrequency ? recurringFrequency.toUpperCase() : null }),
+                    ...(isPinned !== undefined && { isPinned: Boolean(isPinned) }),
+                    ...(sourceAssetId !== undefined && { sourceAssetId: sourceAssetId || null }),
+                    ...(targetAssetId !== undefined && { targetAssetId: targetAssetId || null }),
+                    ...(imageUrls !== undefined || (req.files && req.files.length > 0) ? { 
+                        images: { 
+                            deleteMany: {}, 
+                            create: urls.map(u => ({ url: u })) 
+                        } 
+                    } : {})
+                }
+            });
+
+            return tx.goal.findUnique({
+                where: { id },
+                include: { images: true }
+            });
         });
 
-        if (goal.count === 0) {
-            return res.status(404).json({ success: false, error: 'Goal not found or already deleted' });
-        }
-
-        const updatedGoal = await prisma.goal.findUnique({ where: { id } });
-        res.status(200).json({ success: true, data: updatedGoal });
+        res.status(200).json({
+            success: true,
+            data: { ...result, imageUrls: result.images.map(img => img.url), images: undefined }
+        });
     } catch (error) {
+        if (error.message === 'Goal not found or already deleted') {
+            return res.status(404).json({ success: false, error: error.message });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -277,28 +323,31 @@ export const deleteGoal = async (req, res) => {
                 return res.status(404).json({ success: false, error: 'Refund asset not found' });
             }
 
-            await prisma.$transaction([
-                // Delete the goal
-                prisma.goal.delete({ where: { id } }),
-                // Refund the asset
-                prisma.asset.update({
+            await prisma.$transaction(async (tx) => {
+                const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL REFUND');
+
+                // GoalImage cascade-deletes automatically
+                await tx.goal.delete({ where: { id } });
+
+                await tx.asset.update({
                     where: { id: refundAssetId },
                     data: { value: asset.value + goal.currentAmount }
-                }),
-                // Log the refund transaction
-                prisma.transaction.create({
+                });
+
+                await tx.transaction.create({
                     data: {
                         userId: req.user.userId,
                         assetId: refundAssetId,
                         type: 'INCOME',
                         amount: goal.currentAmount,
-                        category: 'GOAL REFUND',
+                        categoryId,
                         description: `Refund from deleted goal: ${goal.name}`,
                         date: new Date()
                     }
-                })
-            ]);
+                });
+            });
         } else {
+            // GoalImage cascade-deletes automatically
             await prisma.goal.delete({ where: { id } });
         }
 

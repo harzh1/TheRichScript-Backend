@@ -33,45 +33,56 @@ export const getAnalyticsSummary = async (req, res) => {
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const startOfYear = new Date(now.getFullYear(), 0, 1);
 
-        // We fetch raw transactions for category grouping to avoid complex overlapping dates in single queries
-        // Wait, to be efficient we should do separate aggregations or raw query
-        // For simplicity with Prisma and moderate scale, we can fetch only EXPENSE transactions and group in JS,
-        // OR better: do 3 separate groupBy queries. Let's do 3 separate queries.
-        
+        // Group by categoryId, then resolve names
         const allTimeExpenses = await prisma.transaction.groupBy({
-            by: ['category'],
+            by: ['categoryId'],
             where: { userId },
             _sum: { amount: true }
         });
 
         const yearlyExpenses = await prisma.transaction.groupBy({
-            by: ['category'],
+            by: ['categoryId'],
             where: { userId, date: { gte: startOfYear } },
             _sum: { amount: true }
         });
 
         const monthlyExpenses = await prisma.transaction.groupBy({
-            by: ['category'],
+            by: ['categoryId'],
             where: { userId, date: { gte: startOfMonth } },
             _sum: { amount: true }
         });
 
+        // Collect all unique category IDs and batch-fetch their names
+        const allCategoryIds = new Set([
+            ...allTimeExpenses.map(g => g.categoryId),
+            ...yearlyExpenses.map(g => g.categoryId),
+            ...monthlyExpenses.map(g => g.categoryId)
+        ]);
+
+        const categories = await prisma.userCategory.findMany({
+            where: { id: { in: Array.from(allCategoryIds) } },
+            select: { id: true, name: true }
+        });
+
+        const categoryNameMap = {};
+        categories.forEach(c => { categoryNameMap[c.id] = c.name; });
+
         const expensesByCategory = {};
 
         allTimeExpenses.forEach(g => {
-            const cat = g.category.toUpperCase();
+            const cat = categoryNameMap[g.categoryId] || 'UNKNOWN';
             if (!expensesByCategory[cat]) expensesByCategory[cat] = { allTime: 0, monthly: 0, yearly: 0 };
             expensesByCategory[cat].allTime = g._sum.amount || 0;
         });
 
         yearlyExpenses.forEach(g => {
-            const cat = g.category.toUpperCase();
+            const cat = categoryNameMap[g.categoryId] || 'UNKNOWN';
             if (!expensesByCategory[cat]) expensesByCategory[cat] = { allTime: 0, monthly: 0, yearly: 0 };
             expensesByCategory[cat].yearly = g._sum.amount || 0;
         });
 
         monthlyExpenses.forEach(g => {
-            const cat = g.category.toUpperCase();
+            const cat = categoryNameMap[g.categoryId] || 'UNKNOWN';
             if (!expensesByCategory[cat]) expensesByCategory[cat] = { allTime: 0, monthly: 0, yearly: 0 };
             expensesByCategory[cat].monthly = g._sum.amount || 0;
         });

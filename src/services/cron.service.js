@@ -1,4 +1,5 @@
 import prisma from '../config/db.js';
+import { resolveCategoryId } from '../controllers/category.controller.js';
 
 export const runAllCronJobs = async () => {
     console.log('Running auto-funding task...');
@@ -11,8 +12,6 @@ const processAutoFunding = async () => {
     try {
         const now = new Date();
         // Add a 14-hour buffer to account for extreme timezones (like +14)
-        // so that if the external trigger fires at local midnight, 
-        // the server (in UTC) will correctly pick up today's UTC midnight targets.
         const targetDate = new Date(now.getTime() + 14 * 60 * 60 * 1000);
         
         // Process Goals
@@ -28,7 +27,6 @@ const processAutoFunding = async () => {
             let isDue = false;
             
             if (!goal.lastFundedAt) {
-                // If it's never been auto-funded, fund it today
                 isDue = true;
             } else {
                 const diffTime = Math.abs(now - goal.lastFundedAt);
@@ -48,6 +46,8 @@ const processAutoFunding = async () => {
                 
                 if (asset && asset.value >= fundAmount) {
                     await prisma.$transaction(async (tx) => {
+                        const categoryId = await resolveCategoryId(tx, goal.userId, 'GOAL FUNDING');
+
                         await tx.asset.update({
                             where: { id: asset.id },
                             data: { value: asset.value - fundAmount }
@@ -76,7 +76,7 @@ const processAutoFunding = async () => {
                                     toAssetId: goal.targetAssetId,
                                     type: 'TRANSFER',
                                     amount: fundAmount,
-                                    category: 'GOAL FUNDING',
+                                    categoryId,
                                     description: `Auto-funding transfer for goal: ${goal.name}`,
                                     date: now
                                 }
@@ -88,7 +88,7 @@ const processAutoFunding = async () => {
                                     assetId: asset.id,
                                     type: 'EXPENSE',
                                     amount: fundAmount,
-                                    category: 'GOAL FUNDING',
+                                    categoryId,
                                     description: `Auto-funding for goal: ${goal.name}`,
                                     date: now
                                 }
@@ -120,16 +120,28 @@ const processRecurringPlans = async () => {
 
         for (const plan of plans) {
             const asset = await prisma.asset.findUnique({ where: { id: plan.assetId } });
-            if (!asset || asset.value < plan.amount) {
-                console.log(`[CRON] Failed to process plan: ${plan.name}. Insufficient funds or asset missing.`);
+            if (!asset) {
+                console.log(`[CRON] Failed to process plan: ${plan.name}. Asset missing.`);
+                continue;
+            }
+            
+            // Use the normalized txType field (no more || hack)
+            const isIncome = plan.txType === 'INCOME';
+            
+            if (!isIncome && asset.value < plan.amount) {
+                console.log(`[CRON] Failed to process plan: ${plan.name}. Insufficient funds.`);
                 continue;
             }
 
             await prisma.$transaction(async (tx) => {
-                // Deduct from source
+                // Update source balance
+                const newSourceBalance = isIncome 
+                    ? asset.value + plan.amount 
+                    : asset.value - plan.amount;
+                    
                 await tx.asset.update({
                     where: { id: asset.id },
-                    data: { value: asset.value - plan.amount }
+                    data: { value: newSourceBalance }
                 });
 
                 // Calculate next due date
@@ -147,7 +159,7 @@ const processRecurringPlans = async () => {
                     }
                 });
 
-                // Is it a transfer or expense?
+                // The categoryId is already stored on the plan — use it directly
                 if (plan.targetAssetId) {
                     const targetAsset = await tx.asset.findUnique({ where: { id: plan.targetAssetId } });
                     if (targetAsset) {
@@ -156,7 +168,6 @@ const processRecurringPlans = async () => {
                             data: { value: targetAsset.value + plan.amount }
                         });
                         
-                        // Log 2 transactions
                         await tx.transaction.create({
                             data: {
                                 userId: plan.userId,
@@ -164,7 +175,7 @@ const processRecurringPlans = async () => {
                                 toAssetId: targetAsset.id,
                                 type: 'TRANSFER',
                                 amount: plan.amount,
-                                category: plan.category || 'TRANSFER',
+                                categoryId: plan.categoryId,
                                 description: `Auto-transfer: ${plan.name}`,
                                 date: now
                             }
@@ -172,19 +183,18 @@ const processRecurringPlans = async () => {
                         console.log(`[CRON] Successfully processed transfer subscription: ${plan.name}`);
                     }
                 } else {
-                    // Regular expense
                     await tx.transaction.create({
                         data: {
                             userId: plan.userId,
                             assetId: asset.id,
-                            type: 'EXPENSE',
+                            type: isIncome ? 'INCOME' : 'EXPENSE',
                             amount: plan.amount,
-                            category: plan.category,
-                            description: `Auto-expense: ${plan.name}`,
+                            categoryId: plan.categoryId,
+                            description: `Auto-${isIncome ? 'income' : 'expense'}: ${plan.name}`,
                             date: now
                         }
                     });
-                    console.log(`[CRON] Successfully processed recurring expense: ${plan.name}`);
+                    console.log(`[CRON] Successfully processed recurring ${isIncome ? 'income' : 'expense'}: ${plan.name}`);
                 }
             });
         }

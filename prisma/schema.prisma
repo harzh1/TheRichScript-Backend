@@ -20,33 +20,65 @@ model User {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  assets         Asset[]
-  transactions   Transaction[]
-  categoryLimits CategoryLimit[]
-  userCategories UserCategory[]
+  assets          Asset[]
+  transactions    Transaction[]
+  categoryLimits  CategoryLimit[]
+  userCategories  UserCategory[]
+  userAssetTypes  UserAssetType[]
   plannedExpenses PlannedExpense[]
-  goals          Goal[]
-  debts          Debt[]
+  goals           Goal[]
+  debts           Debt[]
 }
 
-model Asset {
+// ─── Normalized Lookup Tables ────────────────────────────────────────────────
+
+model UserCategory {
   id        String   @id @default(uuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
-  type      String
-  value     Float
-  quantity  Float?   // Optional, mainly for crypto
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
   transactions    Transaction[]
+  plannedExpenses PlannedExpense[]
+  categoryLimits  CategoryLimit[]
+
+  @@unique([userId, name])
+}
+
+model UserAssetType {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+
+  assets Asset[]
+
+  @@unique([userId, name])
+}
+
+// ─── Core Financial Tables ───────────────────────────────────────────────────
+
+model Asset {
+  id        String        @id @default(uuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  typeId    String
+  assetType UserAssetType @relation(fields: [typeId], references: [id])
+  value     Float
+  quantity  Float?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  transactions          Transaction[]
+  transactionsTarget    Transaction[]  @relation("TransactionTargetAsset")
   plannedExpensesSource PlannedExpense[] @relation("SourceAsset")
   plannedExpensesTarget PlannedExpense[] @relation("TargetAsset")
-  debts           Debt[]
-  goalsSource     Goal[] @relation("GoalSourceAsset")
-  goalsTarget     Goal[] @relation("GoalTargetAsset")
-  transactionsTarget Transaction[] @relation("TransactionTargetAsset")
+  debts                 Debt[]
+  goalsSource           Goal[] @relation("GoalSourceAsset")
+  goalsTarget           Goal[] @relation("GoalTargetAsset")
 }
 
 enum TransactionType {
@@ -65,7 +97,8 @@ model Transaction {
   toAsset         Asset?          @relation(fields: [toAssetId], references: [id], onDelete: Cascade, name: "TransactionTargetAsset")
   type            TransactionType
   amount          Float
-  category        String
+  categoryId      String
+  category        UserCategory    @relation(fields: [categoryId], references: [id])
   description     String
   date            DateTime
   receiptImageUrl String?
@@ -73,26 +106,19 @@ model Transaction {
 }
 
 model CategoryLimit {
-  id           String   @id @default(uuid())
+  id           String       @id @default(uuid())
   userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  categoryName String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categoryId   String
+  category     UserCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   monthlyLimit Float?
   yearlyLimit  Float?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime     @default(now())
 
-  @@unique([userId, categoryName])
+  @@unique([userId, categoryId])
 }
 
-model UserCategory {
-  id           String   @id @default(uuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name         String
-  createdAt    DateTime @default(now())
-
-  @@unique([userId, name])
-}
+// ─── Planning & Goals ────────────────────────────────────────────────────────
 
 enum PlannedExpenseType {
   MANUAL
@@ -107,21 +133,23 @@ enum Frequency {
 }
 
 model PlannedExpense {
-  id          String             @id @default(uuid())
-  userId      String
-  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  assetId     String
-  asset       Asset              @relation(name: "SourceAsset", fields: [assetId], references: [id], onDelete: Cascade)
+  id            String             @id @default(uuid())
+  userId        String
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assetId       String
+  asset         Asset              @relation(name: "SourceAsset", fields: [assetId], references: [id], onDelete: Cascade)
   targetAssetId String?
-  targetAsset Asset?             @relation(name: "TargetAsset", fields: [targetAssetId], references: [id], onDelete: SetNull)
-  name        String
-  category    String
-  amount      Float
-  type        PlannedExpenseType
-  frequency   Frequency?
-  nextDueDate DateTime?
-  lastFundedAt DateTime?
-  createdAt   DateTime           @default(now())
+  targetAsset   Asset?             @relation(name: "TargetAsset", fields: [targetAssetId], references: [id], onDelete: SetNull)
+  name          String
+  categoryId    String
+  category      UserCategory       @relation(fields: [categoryId], references: [id])
+  amount        Float
+  type          PlannedExpenseType
+  txType        TransactionType    @default(EXPENSE)
+  frequency     Frequency?
+  nextDueDate   DateTime?
+  lastFundedAt  DateTime?
+  createdAt     DateTime           @default(now())
 }
 
 model Goal {
@@ -134,15 +162,26 @@ model Goal {
   expectedDate       DateTime
   isPinned           Boolean    @default(false)
   recurringAmount    Float?
-  recurringFrequency String?
+  recurringFrequency Frequency?
   sourceAssetId      String?
   sourceAsset        Asset?     @relation(name: "GoalSourceAsset", fields: [sourceAssetId], references: [id])
   targetAssetId      String?
   targetAsset        Asset?     @relation(name: "GoalTargetAsset", fields: [targetAssetId], references: [id], onDelete: SetNull)
   lastFundedAt       DateTime?
-  imageUrls          String[]   @default([])
   createdAt          DateTime   @default(now())
+
+  images GoalImage[]
 }
+
+model GoalImage {
+  id        String   @id @default(uuid())
+  goalId    String
+  goal      Goal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  url       String
+  createdAt DateTime @default(now())
+}
+
+// ─── Debts ───────────────────────────────────────────────────────────────────
 
 enum DebtType {
   LENT

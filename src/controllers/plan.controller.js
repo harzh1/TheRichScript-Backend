@@ -1,11 +1,21 @@
 import prisma from '../config/db.js';
+import { resolveCategoryId } from './category.controller.js';
 
 export const getPlans = async (req, res) => {
     try {
         const plans = await prisma.plannedExpense.findMany({
-            where: { userId: req.user.userId }
+            where: { userId: req.user.userId },
+            include: { category: true }
         });
-        res.status(200).json({ success: true, data: plans });
+
+        // Flatten category for frontend compatibility
+        const flatPlans = plans.map(plan => ({
+            ...plan,
+            category: plan.category.name,
+            categoryId: plan.categoryId
+        }));
+
+        res.status(200).json({ success: true, data: flatPlans });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -13,23 +23,32 @@ export const getPlans = async (req, res) => {
 
 export const createPlan = async (req, res) => {
     try {
-        const { assetId, targetAssetId, name, category, amount, type, frequency, nextDueDate } = req.body;
+        const { assetId, targetAssetId, name, category, amount, type, txType, frequency, nextDueDate } = req.body;
 
-        const plan = await prisma.plannedExpense.create({
-            data: {
-                userId: req.user.userId,
-                assetId,
-                ...(targetAssetId && { targetAssetId }),
-                name,
-                category: category.toUpperCase(),
-                amount: parseFloat(amount),
-                type: type.toUpperCase(),
-                ...(frequency && { frequency: frequency.toUpperCase() }),
-                ...(nextDueDate && { nextDueDate: new Date(nextDueDate) })
-            }
+        const plan = await prisma.$transaction(async (tx) => {
+            const categoryId = await resolveCategoryId(tx, req.user.userId, category);
+
+            return tx.plannedExpense.create({
+                data: {
+                    userId: req.user.userId,
+                    assetId,
+                    ...(targetAssetId && { targetAssetId }),
+                    name,
+                    categoryId,
+                    amount: parseFloat(amount),
+                    type: type.toUpperCase(),
+                    txType: txType ? txType.toUpperCase() : 'EXPENSE',
+                    ...(frequency && { frequency: frequency.toUpperCase() }),
+                    ...(nextDueDate && { nextDueDate: new Date(nextDueDate) })
+                },
+                include: { category: true }
+            });
         });
 
-        res.status(201).json({ success: true, data: plan });
+        res.status(201).json({
+            success: true,
+            data: { ...plan, category: plan.category.name, categoryId: plan.categoryId }
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -38,28 +57,47 @@ export const createPlan = async (req, res) => {
 export const updatePlan = async (req, res) => {
     try {
         const { id } = req.params;
-        const { assetId, targetAssetId, name, category, amount, frequency, nextDueDate } = req.body;
+        const { assetId, targetAssetId, name, category, amount, frequency, nextDueDate, txType } = req.body;
 
-        const plan = await prisma.plannedExpense.updateMany({
-            where: { id, userId: req.user.userId },
-            data: {
-                ...(assetId && { assetId }),
-                ...(targetAssetId !== undefined && { targetAssetId: targetAssetId || null }),
-                ...(name && { name }),
-                ...(category && { category: category.toUpperCase() }),
-                ...(amount !== undefined && { amount: parseFloat(amount) }),
-                ...(frequency && { frequency: frequency.toUpperCase() }),
-                ...(nextDueDate && { nextDueDate: new Date(nextDueDate) })
+        const updateData = {};
+
+        if (assetId) updateData.assetId = assetId;
+        if (targetAssetId !== undefined) updateData.targetAssetId = targetAssetId || null;
+        if (name) updateData.name = name;
+        if (amount !== undefined) updateData.amount = parseFloat(amount);
+        if (frequency) updateData.frequency = frequency.toUpperCase();
+        if (nextDueDate) updateData.nextDueDate = new Date(nextDueDate);
+        if (txType) updateData.txType = txType.toUpperCase();
+
+        const result = await prisma.$transaction(async (tx) => {
+            // Resolve category if provided
+            if (category) {
+                updateData.categoryId = await resolveCategoryId(tx, req.user.userId, category);
             }
+
+            const plan = await tx.plannedExpense.updateMany({
+                where: { id, userId: req.user.userId },
+                data: updateData
+            });
+
+            if (plan.count === 0) {
+                throw new Error('Plan not found or already deleted');
+            }
+
+            return tx.plannedExpense.findUnique({
+                where: { id },
+                include: { category: true }
+            });
         });
 
-        if (plan.count === 0) {
-            return res.status(404).json({ success: false, error: 'Plan not found or already deleted' });
-        }
-
-        const updatedPlan = await prisma.plannedExpense.findUnique({ where: { id } });
-        res.status(200).json({ success: true, data: updatedPlan });
+        res.status(200).json({
+            success: true,
+            data: { ...result, category: result.category.name, categoryId: result.categoryId }
+        });
     } catch (error) {
+        if (error.message === 'Plan not found or already deleted') {
+            return res.status(404).json({ success: false, error: error.message });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 };

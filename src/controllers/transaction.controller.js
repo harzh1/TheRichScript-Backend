@@ -1,4 +1,5 @@
 import prisma from '../config/db.js';
+import { resolveCategoryId } from './category.controller.js';
 
 export const getTransactions = async (req, res) => {
     try {
@@ -6,7 +7,7 @@ export const getTransactions = async (req, res) => {
 
         const filters = { userId: req.user.userId };
         
-        if (category) filters.category = category;
+        if (category) filters.category = { name: category.toUpperCase() };
         if (type) filters.type = type;
         if (startDate && endDate) {
             filters.date = {
@@ -21,6 +22,7 @@ export const getTransactions = async (req, res) => {
         const [transactions, total] = await Promise.all([
             prisma.transaction.findMany({
                 where: filters,
+                include: { category: true },
                 orderBy: { date: 'desc' },
                 skip,
                 take
@@ -28,9 +30,16 @@ export const getTransactions = async (req, res) => {
             prisma.transaction.count({ where: filters })
         ]);
 
+        // Flatten category object for frontend compatibility
+        const flatTransactions = transactions.map(tx => ({
+            ...tx,
+            category: tx.category.name,
+            categoryId: tx.categoryId
+        }));
+
         res.status(200).json({ 
             success: true, 
-            data: transactions,
+            data: flatTransactions,
             meta: {
                 total,
                 page: parseInt(page),
@@ -54,6 +63,9 @@ export const createTransaction = async (req, res) => {
         }
 
         const result = await prisma.$transaction(async (tx) => {
+            // Resolve category name → id (auto-creates if needed)
+            const categoryId = await resolveCategoryId(tx, req.user.userId, category);
+
             // 1. Create the transaction
             const transaction = await tx.transaction.create({
                 data: {
@@ -61,11 +73,12 @@ export const createTransaction = async (req, res) => {
                     assetId,
                     type: type.toUpperCase(),
                     amount: parsedAmount,
-                    category: category.toUpperCase(),
+                    categoryId,
                     description: description || '',
                     date: new Date(date),
                     receiptImageUrl
-                }
+                },
+                include: { category: true }
             });
 
             // 2. Adjust Asset Balance
@@ -88,7 +101,11 @@ export const createTransaction = async (req, res) => {
                 data: { value: newBalance }
             });
 
-            return transaction;
+            return {
+                ...transaction,
+                category: transaction.category.name,
+                categoryId: transaction.categoryId
+            };
         });
 
         res.status(201).json({ success: true, data: result });

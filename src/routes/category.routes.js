@@ -1,14 +1,19 @@
 import express from 'express';
-import { getCategoryLimits, setCategoryLimits } from '../controllers/category.controller.js';
+import { getCategories, createCategory, updateCategory, deleteCategory } from '../controllers/category.controller.js';
 import { protect } from '../middlewares/auth.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
-import { createCategoryLimitSchema } from '../validations/category.schema.js';
+import { createCategorySchema, updateCategorySchema } from '../validations/category.schema.js';
+
 const router = express.Router();
 
 router.use(protect);
 
 router.route('/')
-    .get(getCategoryLimits)
-    .post(validate(createCategoryLimitSchema), setCategoryLimits);
+    .get(getCategories)
+    .post(validate(createCategorySchema), createCategory);
+
+router.route('/:id')
+    .put(validate(updateCategorySchema), updateCategory)
+    .delete(deleteCategory);
 
 export default router;
