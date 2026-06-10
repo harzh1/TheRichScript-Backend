@@ -22,39 +22,28 @@ const processAutoFunding = async () => {
         });
 
         for (const goal of goals) {
-            let isDue = false;
-            let diffDays = 0;
+            let nextFundingDate = new Date(now);
             
-            if (!goal.lastFundedAt) {
-                isDue = true;
+            if (goal.lastFundedAt) {
+                nextFundingDate = new Date(goal.lastFundedAt);
+                // Calculate when it SHOULD have run next
+                if (goal.recurringFrequency === 'DAILY') nextFundingDate.setDate(nextFundingDate.getDate() + 1);
+                else if (goal.recurringFrequency === 'WEEKLY') nextFundingDate.setDate(nextFundingDate.getDate() + 7);
+                else if (goal.recurringFrequency === 'MONTHLY') nextFundingDate.setMonth(nextFundingDate.getMonth() + 1);
+                else if (goal.recurringFrequency === 'YEARLY') nextFundingDate.setFullYear(nextFundingDate.getFullYear() + 1);
             } else {
-                const diffTime = Math.abs(now - goal.lastFundedAt);
-                diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                
-                if (goal.recurringFrequency === 'DAILY' && diffDays >= 1) isDue = true;
-                if (goal.recurringFrequency === 'WEEKLY' && diffDays >= 7) isDue = true;
-                if (goal.recurringFrequency === 'MONTHLY' && diffDays >= 30) isDue = true;
-                if (goal.recurringFrequency === 'YEARLY' && diffDays >= 365) isDue = true;
+                // If never funded, it's due immediately
+                nextFundingDate = new Date(now);
+                nextFundingDate.setMilliseconds(nextFundingDate.getMilliseconds() - 1); // ensure it's <= now
             }
 
-            if (isDue && goal.currentAmount < goal.targetAmount) {
+            if (nextFundingDate.getTime() <= now.getTime() && goal.currentAmount < goal.targetAmount) {
                 await prisma.$transaction(async (tx) => {
                     const asset = await tx.asset.findUnique({ where: { id: goal.sourceAssetId } });
                     if (!asset) {
                         console.log(`[CRON] Failed to auto-fund goal: ${goal.name}. Asset missing.`);
                         return;
                     }
-
-                    // Calculate missed cycles based on diffDays if lastFundedAt exists, otherwise 1 cycle
-                    let cyclesToProcess = 1;
-                    if (goal.lastFundedAt) {
-                        if (goal.recurringFrequency === 'DAILY') cyclesToProcess = Math.floor(diffDays / 1);
-                        else if (goal.recurringFrequency === 'WEEKLY') cyclesToProcess = Math.floor(diffDays / 7);
-                        else if (goal.recurringFrequency === 'MONTHLY') cyclesToProcess = Math.floor(diffDays / 30);
-                        else if (goal.recurringFrequency === 'YEARLY') cyclesToProcess = Math.floor(diffDays / 365);
-                    }
-                    
-                    if (cyclesToProcess <= 0) return;
 
                     let currentAssetBalance = asset.value;
                     let currentGoalAmount = goal.currentAmount;
@@ -69,9 +58,13 @@ const processAutoFunding = async () => {
                     
                     const categoryId = await resolveCategoryId(tx, goal.userId, 'GOAL FUNDING');
                     
-                    let simulatedDate = goal.lastFundedAt ? new Date(goal.lastFundedAt) : new Date(now);
+                    let simulatedDate = new Date(nextFundingDate);
+                    // Prevent backdating further than creation date just in case
+                    if (goal.createdAt && simulatedDate < goal.createdAt) {
+                        simulatedDate = new Date(goal.createdAt);
+                    }
 
-                    while (loops < cyclesToProcess && currentGoalAmount < goal.targetAmount && loops < 365) {
+                    while (simulatedDate.getTime() <= now.getTime() && currentGoalAmount < goal.targetAmount && loops < 365) {
                         const amountNeeded = goal.targetAmount - currentGoalAmount;
                         const fundAmount = Math.min(goal.recurringAmount, amountNeeded);
 
@@ -84,14 +77,6 @@ const processAutoFunding = async () => {
                         currentGoalAmount += fundAmount;
                         if (targetAsset) currentTargetBalance += fundAmount;
                         
-                        // Advance simulated date for accurate transaction history
-                        if (goal.lastFundedAt) {
-                            if (goal.recurringFrequency === 'DAILY') simulatedDate.setDate(simulatedDate.getDate() + 1);
-                            else if (goal.recurringFrequency === 'WEEKLY') simulatedDate.setDate(simulatedDate.getDate() + 7);
-                            else if (goal.recurringFrequency === 'MONTHLY') simulatedDate.setMonth(simulatedDate.getMonth() + 1);
-                            else if (goal.recurringFrequency === 'YEARLY') simulatedDate.setFullYear(simulatedDate.getFullYear() + 1);
-                        }
-
                         if (goal.targetAssetId && targetAsset) {
                             await tx.transaction.create({
                                 data: {
@@ -118,6 +103,12 @@ const processAutoFunding = async () => {
                                 }
                             });
                         }
+                        
+                        // Advance simulated date
+                        if (goal.recurringFrequency === 'DAILY') simulatedDate.setDate(simulatedDate.getDate() + 1);
+                        else if (goal.recurringFrequency === 'WEEKLY') simulatedDate.setDate(simulatedDate.getDate() + 7);
+                        else if (goal.recurringFrequency === 'MONTHLY') simulatedDate.setMonth(simulatedDate.getMonth() + 1);
+                        else if (goal.recurringFrequency === 'YEARLY') simulatedDate.setFullYear(simulatedDate.getFullYear() + 1);
                         
                         loops++;
                     }
@@ -155,7 +146,7 @@ const processAutoFunding = async () => {
 const processRecurringPlans = async () => {
     try {
         const now = new Date();
-        const targetDate = new Date(now.getTime() + 14 * 60 * 60 * 1000);
+        const targetDate = new Date(now);
 
         const plans = await prisma.plannedExpense.findMany({
             where: {
@@ -184,7 +175,7 @@ const processRecurringPlans = async () => {
                     if (targetAsset) currentTargetBalance = targetAsset.value;
                 }
 
-                while (currentNextDate <= targetDate && loops < 365) {
+                while (currentNextDate.getTime() <= now.getTime() && loops < 365) {
                     if (!isIncome && currentAssetBalance < plan.amount) {
                         console.log(`[CRON] Insufficient funds to continue processing plan: ${plan.name} at ${currentNextDate.toISOString()}`);
                         break;
