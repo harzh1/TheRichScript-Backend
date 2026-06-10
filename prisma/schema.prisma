@@ -204,7 +204,7 @@ model Debt {
   personName    String
   amount        Float
   settledAmount Float      @default(0)
-  dueDate       DateTime
+  dueDate       DateTime?
   status        DebtStatus @default(ACTIVE)
   createdAt     DateTime   @default(now())
 }
