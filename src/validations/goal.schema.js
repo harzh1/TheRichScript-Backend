@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+const imageUrlsSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') return undefined;
+    return Array.isArray(value) ? value : [value];
+  },
+  z.array(z.string().url()).optional()
+);
+
 export const createGoalSchema = z.object({
   body: z.object({
     name: z.string().min(1, 'Goal name is required'),
@@ -10,7 +18,7 @@ export const createGoalSchema = z.object({
     recurringFrequency: z.string().optional().nullable(),
     sourceAssetId: z.string().uuid('Invalid Asset ID').optional().nullable(),
     targetAssetId: z.string().uuid('Invalid Target Asset ID').optional().nullable(),
-    imageUrls: z.array(z.string().url()).optional()
+    imageUrls: imageUrlsSchema
   })
 });
 
@@ -27,7 +35,7 @@ export const updateGoalSchema = z.object({
     recurringFrequency: z.string().optional().nullable(),
     sourceAssetId: z.string().uuid('Invalid Asset ID').optional().nullable(),
     targetAssetId: z.string().uuid('Invalid Target Asset ID').optional().nullable(),
-    imageUrls: z.array(z.string().url()).optional()
+    imageUrls: imageUrlsSchema
   })
 });
 
