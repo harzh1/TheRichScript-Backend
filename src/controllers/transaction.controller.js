@@ -3,7 +3,7 @@ import { resolveCategoryId } from './category.controller.js';
 
 export const getTransactions = async (req, res) => {
     try {
-        const { category, type, startDate, endDate, page = 1, limit = 50 } = req.query;
+        const { category, type, startDate, endDate, page = 1, limit = 100 } = req.query;
 
         const filters = { userId: req.user.userId };
         

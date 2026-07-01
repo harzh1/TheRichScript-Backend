@@ -7,8 +7,8 @@ async function startServer() {
         await prisma.$connect();
         console.log('✅ Connected to PostgreSQL via Prisma successfully.');
 
-        app.listen(config.port, () => {
-            console.log(`🚀 Server running on port ${config.port}`);
+        app.listen(config.port, '0.0.0.0', () => {
+            console.log(`🚀 Server running on port ${config.port} (0.0.0.0)`);
         });
     } catch (error) {
         console.error('❌ Database connection failed:', error.message);
