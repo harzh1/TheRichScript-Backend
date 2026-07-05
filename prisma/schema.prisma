@@ -101,8 +101,10 @@ model Transaction {
   category        UserCategory    @relation(fields: [categoryId], references: [id])
   description     String
   date            DateTime
-  receiptImageUrl String?
-  createdAt       DateTime        @default(now())
+  receiptImageUrl  String?
+  linkedDebtId     String?
+  linkedDebtAction String?
+  createdAt        DateTime        @default(now())
 }
 
 model CategoryLimit {

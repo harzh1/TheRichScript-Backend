@@ -23,7 +23,10 @@ export const getTransactions = async (req, res) => {
             prisma.transaction.findMany({
                 where: filters,
                 include: { category: true },
-                orderBy: { date: 'desc' },
+                orderBy: [
+                    { date: 'desc' },
+                    { createdAt: 'desc' }
+                ],
                 skip,
                 take
             }),
@@ -172,6 +175,25 @@ export const deleteTransaction = async (req, res) => {
                     where: { id: transaction.assetId },
                     data: { value: revertedBalance }
                 });
+                
+                if (transaction.linkedDebtId) {
+                    const debt = await tx.debt.findUnique({ where: { id: transaction.linkedDebtId } });
+                    if (debt) {
+                        if (transaction.linkedDebtAction === 'CREATE') {
+                            await tx.debt.delete({ where: { id: debt.id } });
+                        } else if (transaction.linkedDebtAction === 'SETTLE') {
+                            const newSettledAmount = Math.max(0, debt.settledAmount - transaction.amount);
+                            await tx.debt.update({
+                                where: { id: debt.id },
+                                data: {
+                                    settledAmount: newSettledAmount,
+                                    status: 'ACTIVE'
+                                }
+                            });
+                        }
+                    }
+                }
+
                 await tx.transaction.delete({ where: { id } });
             });
         }

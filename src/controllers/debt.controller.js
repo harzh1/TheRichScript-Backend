@@ -1,4 +1,5 @@
 import prisma from '../config/db.js';
+import { resolveCategoryId } from './category.controller.js';
 
 export const getDebts = async (req, res) => {
     try {
@@ -41,6 +42,25 @@ export const createDebt = async (req, res) => {
                 });
             }
 
+            // Create Ledger Transaction
+            const categoryName = 'DEBT';
+            const categoryId = await resolveCategoryId(tx, req.user.userId, categoryName);
+            const txDescription = type.toUpperCase() === 'LENT' ? `Lent to ${debt.personName}` : `Borrowed from ${debt.personName}`;
+
+            await tx.transaction.create({
+                data: {
+                    userId: req.user.userId,
+                    assetId,
+                    type: type.toUpperCase() === 'LENT' ? 'EXPENSE' : 'INCOME',
+                    amount: parsedAmount,
+                    categoryId,
+                    description: txDescription,
+                    date: debt.createdAt,
+                    linkedDebtId: debt.id,
+                    linkedDebtAction: 'CREATE'
+                }
+            });
+
             return debt;
         });
 
@@ -82,6 +102,25 @@ export const settleDebt = async (req, res) => {
                     data: { value: newBalance }
                 });
             }
+
+            // Create Ledger Transaction for Settlement
+            const categoryName = 'DEBT REPAYMENT';
+            const categoryId = await resolveCategoryId(tx, req.user.userId, categoryName);
+            const txDescription = debt.type === 'LENT' ? `Repayment from ${debt.personName}` : `Repayment to ${debt.personName}`;
+
+            await tx.transaction.create({
+                data: {
+                    userId: req.user.userId,
+                    assetId,
+                    type: debt.type === 'LENT' ? 'INCOME' : 'EXPENSE',
+                    amount: parsedAmount,
+                    categoryId,
+                    description: txDescription,
+                    date: new Date(),
+                    linkedDebtId: debt.id,
+                    linkedDebtAction: 'SETTLE'
+                }
+            });
 
             return updatedDebt;
         });
