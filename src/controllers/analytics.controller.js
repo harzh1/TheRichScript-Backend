@@ -29,11 +29,14 @@ export const getAnalyticsSummary = async (req, res) => {
         const balance = totalIncome - totalExpense;
 
         // 3. Expenses By Category (All Time, Monthly, Yearly)
+        const tzOffset = parseInt(req.query.tzOffset || '0');
+        const toClientDate = (date) => new Date(new Date(date).getTime() - (tzOffset * 60 * 1000));
+
         const monthQuery = req.query.month; // Expected format: YYYY-MM
-        const now = new Date();
+        const now = toClientDate(new Date());
         
-        let targetYear = now.getFullYear();
-        let targetMonth = now.getMonth();
+        let targetYear = now.getUTCFullYear();
+        let targetMonth = now.getUTCMonth();
         
         if (monthQuery && monthQuery.match(/^\d{4}-\d{2}$/)) {
             const [y, m] = monthQuery.split('-');
@@ -41,9 +44,14 @@ export const getAnalyticsSummary = async (req, res) => {
             targetMonth = parseInt(m) - 1; // 0-indexed
         }
 
-        const startOfMonth = new Date(targetYear, targetMonth, 1);
-        const endOfMonth = new Date(targetYear, targetMonth + 1, 0, 23, 59, 59, 999);
-        const startOfYear = new Date(targetYear, 0, 1);
+        const startOfMonthPseudo = new Date(Date.UTC(targetYear, targetMonth, 1));
+        const startOfMonth = new Date(startOfMonthPseudo.getTime() + (tzOffset * 60 * 1000));
+        
+        const endOfMonthPseudo = new Date(Date.UTC(targetYear, targetMonth + 1, 0, 23, 59, 59, 999));
+        const endOfMonth = new Date(endOfMonthPseudo.getTime() + (tzOffset * 60 * 1000));
+
+        const startOfYearPseudo = new Date(Date.UTC(targetYear, 0, 1));
+        const startOfYear = new Date(startOfYearPseudo.getTime() + (tzOffset * 60 * 1000));
 
         // Group by categoryId, then resolve names
         const allTimeExpenses = await prisma.transaction.groupBy({
@@ -131,7 +139,8 @@ export const getAnalyticsSummary = async (req, res) => {
         });
 
         // 4. Monthly Trends (Last 6 Months)
-        const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+        const sixMonthsAgoPseudo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1));
+        const sixMonthsAgo = new Date(sixMonthsAgoPseudo.getTime() + (tzOffset * 60 * 1000));
         
         const sixMonthsTx = await prisma.transaction.findMany({
             where: {
@@ -145,20 +154,20 @@ export const getAnalyticsSummary = async (req, res) => {
         
         // Initialize last 6 months with 0
         for (let i = 5; i >= 0; i--) {
-            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-            const monthLabel = d.toLocaleString('default', { month: 'short' });
-            monthlyTrendsMap[`${d.getFullYear()}-${d.getMonth()}`] = {
+            const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+            const monthLabel = d.toLocaleString('default', { month: 'short', timeZone: 'UTC' });
+            monthlyTrendsMap[`${d.getUTCFullYear()}-${d.getUTCMonth()}`] = {
                 label: monthLabel,
                 income: 0,
                 expense: 0,
-                year: d.getFullYear(),
-                monthIndex: d.getMonth()
+                year: d.getUTCFullYear(),
+                monthIndex: d.getUTCMonth()
             };
         }
 
         sixMonthsTx.forEach(tx => {
-            const txDate = new Date(tx.date);
-            const key = `${txDate.getFullYear()}-${txDate.getMonth()}`;
+            const txDate = toClientDate(tx.date);
+            const key = `${txDate.getUTCFullYear()}-${txDate.getUTCMonth()}`;
             if (monthlyTrendsMap[key]) {
                 if (tx.type === 'INCOME') {
                     monthlyTrendsMap[key].income += tx.amount;
@@ -184,11 +193,10 @@ export const getAnalyticsSummary = async (req, res) => {
         });
 
         const monthDailyMap = {};
-        const daysInMonth = endOfMonth.getDate();
+        const daysInMonth = endOfMonthPseudo.getUTCDate();
         
         for(let i = 1; i <= daysInMonth; i++) {
-            const d = new Date(targetYear, targetMonth, i);
-            const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+            const key = `${targetYear}-${targetMonth}-${i}`;
             monthDailyMap[key] = {
                 label: i.toString(),
                 dateStr: key,
@@ -197,8 +205,8 @@ export const getAnalyticsSummary = async (req, res) => {
         }
 
         monthTx.forEach(tx => {
-            const d = new Date(tx.date);
-            const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+            const d = toClientDate(tx.date);
+            const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
             if (monthDailyMap[key]) {
                 monthDailyMap[key].expense += tx.amount;
                 const catName = categoryNameMap[tx.categoryId] || 'UNKNOWN';
