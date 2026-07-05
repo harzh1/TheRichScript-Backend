@@ -64,6 +64,8 @@ const processAutoFunding = async () => {
                         simulatedDate = new Date(goal.createdAt);
                     }
 
+                    let transactionsToCreate = [];
+
                     while (simulatedDate.getTime() <= now.getTime() && currentGoalAmount < goal.targetAmount && loops < 365) {
                         const amountNeeded = goal.targetAmount - currentGoalAmount;
                         const fundAmount = Math.min(goal.recurringAmount, amountNeeded);
@@ -78,29 +80,25 @@ const processAutoFunding = async () => {
                         if (targetAsset) currentTargetBalance += fundAmount;
                         
                         if (goal.targetAssetId && targetAsset) {
-                            await tx.transaction.create({
-                                data: {
-                                    userId: goal.userId,
-                                    assetId: asset.id,
-                                    toAssetId: targetAsset.id,
-                                    type: 'TRANSFER',
-                                    amount: fundAmount,
-                                    categoryId,
-                                    description: `Auto-funding transfer for goal: ${goal.name}`,
-                                    date: new Date(simulatedDate)
-                                }
+                            transactionsToCreate.push({
+                                userId: goal.userId,
+                                assetId: asset.id,
+                                toAssetId: targetAsset.id,
+                                type: 'TRANSFER',
+                                amount: fundAmount,
+                                categoryId,
+                                description: `Auto-funding transfer for goal: ${goal.name}`,
+                                date: new Date(simulatedDate)
                             });
                         } else {
-                            await tx.transaction.create({
-                                data: {
-                                    userId: goal.userId,
-                                    assetId: asset.id,
-                                    type: 'EXPENSE',
-                                    amount: fundAmount,
-                                    categoryId,
-                                    description: `Auto-funding for goal: ${goal.name}`,
-                                    date: new Date(simulatedDate)
-                                }
+                            transactionsToCreate.push({
+                                userId: goal.userId,
+                                assetId: asset.id,
+                                type: 'EXPENSE',
+                                amount: fundAmount,
+                                categoryId,
+                                description: `Auto-funding for goal: ${goal.name}`,
+                                date: new Date(simulatedDate)
                             });
                         }
                         
@@ -111,6 +109,10 @@ const processAutoFunding = async () => {
                         else if (goal.recurringFrequency === 'YEARLY') simulatedDate.setFullYear(simulatedDate.getFullYear() + 1);
                         
                         loops++;
+                    }
+
+                    if (transactionsToCreate.length > 0) {
+                        await tx.transaction.createMany({ data: transactionsToCreate });
                     }
 
                     if (loops > 0) {
@@ -175,6 +177,8 @@ const processRecurringPlans = async () => {
                     if (targetAsset) currentTargetBalance = targetAsset.value;
                 }
 
+                let transactionsToCreate = [];
+
                 while (currentNextDate.getTime() <= now.getTime() && loops < 365) {
                     if (!isIncome && currentAssetBalance < plan.amount) {
                         console.log(`[CRON] Insufficient funds to continue processing plan: ${plan.name} at ${currentNextDate.toISOString()}`);
@@ -192,29 +196,25 @@ const processRecurringPlans = async () => {
 
                     // Create historical transaction
                     if (plan.targetAssetId && targetAsset) {
-                        await tx.transaction.create({
-                            data: {
-                                userId: plan.userId,
-                                assetId: asset.id,
-                                toAssetId: targetAsset.id,
-                                type: 'TRANSFER',
-                                amount: plan.amount,
-                                categoryId: plan.categoryId,
-                                description: `Auto-transfer: ${plan.name}`,
-                                date: new Date(currentNextDate)
-                            }
+                        transactionsToCreate.push({
+                            userId: plan.userId,
+                            assetId: asset.id,
+                            toAssetId: targetAsset.id,
+                            type: 'TRANSFER',
+                            amount: plan.amount,
+                            categoryId: plan.categoryId,
+                            description: `Auto-transfer: ${plan.name}`,
+                            date: new Date(currentNextDate)
                         });
                     } else {
-                        await tx.transaction.create({
-                            data: {
-                                userId: plan.userId,
-                                assetId: asset.id,
-                                type: isIncome ? 'INCOME' : 'EXPENSE',
-                                amount: plan.amount,
-                                categoryId: plan.categoryId,
-                                description: `Auto-${isIncome ? 'income' : 'expense'}: ${plan.name}`,
-                                date: new Date(currentNextDate)
-                            }
+                        transactionsToCreate.push({
+                            userId: plan.userId,
+                            assetId: asset.id,
+                            type: isIncome ? 'INCOME' : 'EXPENSE',
+                            amount: plan.amount,
+                            categoryId: plan.categoryId,
+                            description: `Auto-${isIncome ? 'income' : 'expense'}: ${plan.name}`,
+                            date: new Date(currentNextDate)
                         });
                     }
                     
@@ -225,6 +225,10 @@ const processRecurringPlans = async () => {
                     else if (plan.frequency === 'YEARLY') currentNextDate.setFullYear(currentNextDate.getFullYear() + 1);
                     
                     loops++;
+                }
+
+                if (transactionsToCreate.length > 0) {
+                    await tx.transaction.createMany({ data: transactionsToCreate });
                 }
 
                 if (loops > 0) {
