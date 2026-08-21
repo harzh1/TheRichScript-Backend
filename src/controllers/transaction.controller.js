@@ -1,5 +1,6 @@
 import prisma from '../config/db.js';
 import { resolveCategoryId } from './category.controller.js';
+import { resolveIncomeSourceId } from './incomeSource.controller.js';
 
 export const getTransactions = async (req, res) => {
     try {
@@ -22,7 +23,10 @@ export const getTransactions = async (req, res) => {
         const [transactions, total] = await Promise.all([
             prisma.transaction.findMany({
                 where: filters,
-                include: { category: true },
+                include: {
+                    category: true,
+                    incomeSource: true
+                },
                 orderBy: [
                     { date: 'desc' },
                     { createdAt: 'desc' }
@@ -33,11 +37,13 @@ export const getTransactions = async (req, res) => {
             prisma.transaction.count({ where: filters })
         ]);
 
-        // Flatten category object for frontend compatibility
+        // Flatten category & incomeSource objects for frontend compatibility
         const flatTransactions = transactions.map(tx => ({
             ...tx,
             category: tx.category.name,
-            categoryId: tx.categoryId
+            categoryId: tx.categoryId,
+            incomeSource: tx.incomeSource ? tx.incomeSource.name : null,
+            incomeSourceId: tx.incomeSourceId
         }));
 
         res.status(200).json({ 
@@ -57,7 +63,7 @@ export const getTransactions = async (req, res) => {
 
 export const createTransaction = async (req, res) => {
     try {
-        const { assetId, type, amount, category, description, date } = req.body;
+        const { assetId, type, amount, category, description, date, incomeSourceId, incomeSource } = req.body;
         const parsedAmount = parseFloat(amount);
         const receiptImageUrl = req.file ? req.file.path : null;
 
@@ -69,6 +75,16 @@ export const createTransaction = async (req, res) => {
             // Resolve category name → id (auto-creates if needed)
             const categoryId = await resolveCategoryId(tx, req.user.userId, category);
 
+            // If income, resolve income source ID
+            let resolvedIncomeSourceId = null;
+            if (type.toUpperCase() === 'INCOME') {
+                resolvedIncomeSourceId = await resolveIncomeSourceId(
+                    tx,
+                    req.user.userId,
+                    incomeSourceId || incomeSource
+                );
+            }
+
             // 1. Create the transaction
             const transaction = await tx.transaction.create({
                 data: {
@@ -77,11 +93,15 @@ export const createTransaction = async (req, res) => {
                     type: type.toUpperCase(),
                     amount: parsedAmount,
                     categoryId,
+                    incomeSourceId: resolvedIncomeSourceId,
                     description: description || '',
                     date: new Date(date),
                     receiptImageUrl
                 },
-                include: { category: true }
+                include: {
+                    category: true,
+                    incomeSource: true
+                }
             });
 
             // 2. Adjust Asset Balance
@@ -107,7 +127,9 @@ export const createTransaction = async (req, res) => {
             return {
                 ...transaction,
                 category: transaction.category.name,
-                categoryId: transaction.categoryId
+                categoryId: transaction.categoryId,
+                incomeSource: transaction.incomeSource ? transaction.incomeSource.name : null,
+                incomeSourceId: transaction.incomeSourceId
             };
         });
 
