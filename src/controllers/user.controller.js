@@ -1,4 +1,5 @@
 import prisma from '../config/db.js';
+import { sanitizeUser } from './auth.controller.js';
 
 export const updateSettings = async (req, res) => {
     try {
@@ -17,14 +18,8 @@ export const updateSettings = async (req, res) => {
 
         res.status(200).json({ 
             success: true, 
-            user: { 
-                id: user.id, 
-                email: user.email, 
-                firstName: user.firstName, 
-                lastName: user.lastName,
-                country: user.country,
-                currency: user.currency
-            } 
+            user: sanitizeUser(user),
+            data: sanitizeUser(user)
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });

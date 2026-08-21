@@ -16,5 +16,14 @@ const storage = new CloudinaryStorage({
     }
 });
 
+const avatarStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'therichscript_avatars',
+        allowed_formats: ['jpg', 'png', 'jpeg', 'webp']
+    }
+});
+
 export const upload = multer({ storage });
+export const uploadAvatar = multer({ storage: avatarStorage });
 export { cloudinary };

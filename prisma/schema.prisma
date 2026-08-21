@@ -17,6 +17,7 @@ model User {
   telegramChatId String?
   country        String   @default("IN")
   currency       String   @default("INR")
+  avatarUrl      String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
