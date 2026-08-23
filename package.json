@@ -5,7 +5,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "npx prisma generate && node src/server.js",
+    "start": "node node_modules/prisma/build/index.js generate && node src/server.js",
     "build": "npx prisma generate",
     "postinstall": "npx prisma generate",
     "test": "echo \"No test specified\" && exit 0",
