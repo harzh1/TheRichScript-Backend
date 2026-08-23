@@ -5,9 +5,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "prisma generate && node src/server.js",
-    "build": "prisma generate",
-    "postinstall": "prisma generate",
+    "start": "npx prisma generate && node src/server.js",
+    "build": "npx prisma generate",
+    "postinstall": "npx prisma generate",
     "test": "echo \"No test specified\" && exit 0",
     "cron": "node src/scripts/run-cron.js"
   },
