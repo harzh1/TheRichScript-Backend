@@ -1,5 +1,5 @@
 import express from 'express';
-import { register, login, getMe, updateProfile, updatePassword, updateAvatar, removeAvatar } from '../controllers/auth.controller.js';
+import { register, login, getMe, updateProfile, updatePassword, updateAvatar, removeAvatar, deleteAccount } from '../controllers/auth.controller.js';
 import { protect } from '../middlewares/auth.middleware.js';
 import { uploadAvatar } from '../config/cloudinary.js';
 import { validate } from '../middlewares/validate.middleware.js';
@@ -14,5 +14,6 @@ router.put('/profile', protect, validate(updateProfileSchema), updateProfile);
 router.put('/avatar', protect, uploadAvatar.single('avatar'), updateAvatar);
 router.delete('/avatar', protect, removeAvatar);
 router.put('/password', protect, validate(updatePasswordSchema), updatePassword);
+router.delete('/account', protect, deleteAccount);
 
 export default router;
