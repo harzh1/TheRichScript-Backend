@@ -33,6 +33,14 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
     initTelegramBot();
 }
 
+app.get('/', (req, res) => {
+    res.json({ success: true, status: 'online', service: 'TheRichScript Backend API', timestamp: new Date().toISOString() });
+});
+
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'healthy', uptime: process.uptime() });
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/transactions', transactionRoutes);

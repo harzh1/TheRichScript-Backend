@@ -1,13 +1,14 @@
 {
-  "name": "finance-tool-backend",
+  "name": "richscript-backend",
   "version": "1.0.0",
   "type": "module",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node src/server.js",
-    "postinstall": "prisma generate",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node node_modules/prisma/build/index.js generate && node src/server.js",
+    "build": "npx prisma generate",
+    "postinstall": "npx prisma generate",
+    "test": "echo \"No test specified\" && exit 0",
     "cron": "node src/scripts/run-cron.js"
   },
   "keywords": [],
@@ -22,12 +23,12 @@
     "express": "^5.2.1",
     "googleapis": "^173.0.0",
     "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.11.0",
     "multer": "^2.1.1",
     "multer-storage-cloudinary": "^4.0.0",
+    "node-cron": "^3.0.3",
     "node-telegram-bot-api": "^0.67.0",
+    "prisma": "^6.9.0",
     "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "prisma": "^6.9.0"
   }
 }

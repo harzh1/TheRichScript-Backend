@@ -179,3 +179,68 @@ export const updatePassword = async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 };
+
+export const deleteAccount = async (req, res) => {
+    try {
+        const { password } = req.body;
+        if (!password) {
+            return res.status(400).json({ success: false, error: 'Password is required to delete your account.' });
+        }
+
+        const user = await prisma.user.findUnique({ where: { id: req.user.userId } });
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found.' });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.passwordHash);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, error: 'Incorrect password.' });
+        }
+
+        const userId = req.user.userId;
+
+        await prisma.$transaction([
+            prisma.goalImage.deleteMany({
+                where: { goal: { userId } }
+            }),
+            prisma.goal.deleteMany({
+                where: { userId }
+            }),
+            prisma.plannedExpense.deleteMany({
+                where: { userId }
+            }),
+            prisma.transaction.deleteMany({
+                where: { userId }
+            }),
+            prisma.debt.deleteMany({
+                where: { userId }
+            }),
+            prisma.categoryLimit.deleteMany({
+                where: { userId }
+            }),
+            prisma.incomeSource.deleteMany({
+                where: { userId }
+            }),
+            prisma.asset.deleteMany({
+                where: { userId }
+            }),
+            prisma.userCategory.deleteMany({
+                where: { userId }
+            }),
+            prisma.userAssetType.deleteMany({
+                where: { userId }
+            }),
+            prisma.user.delete({
+                where: { id: userId }
+            })
+        ]);
+
+        res.status(200).json({
+            success: true,
+            message: 'Account and all associated data permanently deleted successfully.'
+        });
+    } catch (error) {
+        console.error('Error deleting account:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};

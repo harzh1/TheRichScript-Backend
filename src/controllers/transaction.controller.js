@@ -4,21 +4,33 @@ import { resolveIncomeSourceId } from './incomeSource.controller.js';
 
 export const getTransactions = async (req, res) => {
     try {
-        const { category, type, startDate, endDate, page = 1, limit = 100 } = req.query;
+        const { category, type, startDate, endDate, page = 1, limit = 30, search } = req.query;
 
         const filters = { userId: req.user.userId };
         
-        if (category) filters.category = { name: category.toUpperCase() };
-        if (type) filters.type = type;
-        if (startDate && endDate) {
-            filters.date = {
-                gte: new Date(startDate),
-                lte: new Date(endDate)
-            };
+        if (category && category !== 'ALL') {
+            filters.category = { name: category.toUpperCase() };
+        }
+        if (type && type !== 'ALL') {
+            filters.type = type.toUpperCase();
+        }
+        if (startDate || endDate) {
+            filters.date = {};
+            if (startDate) filters.date.gte = new Date(startDate);
+            if (endDate) filters.date.lte = new Date(endDate);
+        }
+        if (search && search.trim()) {
+            const query = search.trim();
+            filters.OR = [
+                { description: { contains: query, mode: 'insensitive' } },
+                { category: { name: { contains: query, mode: 'insensitive' } } }
+            ];
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        const take = parseInt(limit);
+        const parsedPage = Math.max(1, parseInt(page) || 1);
+        const parsedLimit = Math.min(200, Math.max(1, parseInt(limit) || 30));
+        const skip = (parsedPage - 1) * parsedLimit;
+        const take = parsedLimit;
 
         const [transactions, total] = await Promise.all([
             prisma.transaction.findMany({
@@ -40,7 +52,7 @@ export const getTransactions = async (req, res) => {
         // Flatten category & incomeSource objects for frontend compatibility
         const flatTransactions = transactions.map(tx => ({
             ...tx,
-            category: tx.category.name,
+            category: tx.category ? tx.category.name : '',
             categoryId: tx.categoryId,
             incomeSource: tx.incomeSource ? tx.incomeSource.name : null,
             incomeSourceId: tx.incomeSourceId
@@ -51,12 +63,14 @@ export const getTransactions = async (req, res) => {
             data: flatTransactions,
             meta: {
                 total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                totalPages: Math.ceil(total / take)
+                page: parsedPage,
+                limit: parsedLimit,
+                totalPages: Math.ceil(total / take),
+                hasMore: (skip + flatTransactions.length) < total
             }
         });
     } catch (error) {
+        console.error('Error fetching transactions:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
