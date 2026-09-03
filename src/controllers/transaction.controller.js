@@ -157,6 +157,133 @@ export const createTransaction = async (req, res) => {
     }
 };
 
+export const updateTransaction = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { assetId, type, amount, category, description, date, incomeSourceId, incomeSource } = req.body;
+        const receiptImageUrl = req.file ? req.file.path : (req.body.receiptImageUrl || undefined);
+
+        const existingTx = await prisma.transaction.findUnique({
+            where: { id, userId: req.user.userId }
+        });
+
+        if (!existingTx) {
+            return res.status(404).json({ success: false, error: 'Transaction not found' });
+        }
+
+        const newType = (type || existingTx.type).toUpperCase();
+        const newAmount = amount !== undefined ? parseFloat(amount) : existingTx.amount;
+        const newAssetId = assetId || existingTx.assetId;
+        const newDate = date ? new Date(date) : existingTx.date;
+        const newDescription = description !== undefined ? description : existingTx.description;
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Revert old transaction balance impact from the old asset
+            const oldAsset = await tx.asset.findUnique({ where: { id: existingTx.assetId } });
+            if (!oldAsset) {
+                throw new Error('Original associated asset not found');
+            }
+
+            if (existingTx.type === 'TRANSFER') {
+                if (existingTx.toAssetId) {
+                    const oldTargetAsset = await tx.asset.findUnique({ where: { id: existingTx.toAssetId } });
+                    if (oldTargetAsset) {
+                        await tx.asset.update({
+                            where: { id: existingTx.assetId },
+                            data: { value: oldAsset.value + existingTx.amount }
+                        });
+                        await tx.asset.update({
+                            where: { id: existingTx.toAssetId },
+                            data: { value: oldTargetAsset.value - existingTx.amount }
+                        });
+                    }
+                }
+            } else if (existingTx.type === 'INCOME') {
+                await tx.asset.update({
+                    where: { id: existingTx.assetId },
+                    data: { value: oldAsset.value - existingTx.amount }
+                });
+            } else { // EXPENSE
+                await tx.asset.update({
+                    where: { id: existingTx.assetId },
+                    data: { value: oldAsset.value + existingTx.amount }
+                });
+            }
+
+            // 2. Resolve category & incomeSource if provided
+            let categoryId = existingTx.categoryId;
+            if (category) {
+                categoryId = await resolveCategoryId(tx, req.user.userId, category);
+            }
+
+            let resolvedIncomeSourceId = existingTx.incomeSourceId;
+            if (newType === 'INCOME' && (incomeSourceId || incomeSource)) {
+                resolvedIncomeSourceId = await resolveIncomeSourceId(
+                    tx,
+                    req.user.userId,
+                    incomeSourceId || incomeSource
+                );
+            } else if (newType !== 'INCOME') {
+                resolvedIncomeSourceId = null;
+            }
+
+            // 3. Fetch current state of target asset
+            const targetAsset = await tx.asset.findUnique({ where: { id: newAssetId, userId: req.user.userId } });
+            if (!targetAsset) {
+                throw new Error('Selected asset not found');
+            }
+
+            if (newType === 'EXPENSE' && targetAsset.value < newAmount) {
+                throw new Error('Insufficient funds in the selected asset');
+            }
+
+            const updatedAssetBalance = newType === 'INCOME'
+                ? targetAsset.value + newAmount
+                : targetAsset.value - newAmount;
+
+            await tx.asset.update({
+                where: { id: newAssetId },
+                data: { value: updatedAssetBalance }
+            });
+
+            // 4. Update the transaction record
+            const updatedTx = await tx.transaction.update({
+                where: { id },
+                data: {
+                    assetId: newAssetId,
+                    type: newType,
+                    amount: newAmount,
+                    categoryId,
+                    incomeSourceId: resolvedIncomeSourceId,
+                    description: newDescription,
+                    date: newDate,
+                    ...(receiptImageUrl !== undefined ? { receiptImageUrl } : {})
+                },
+                include: {
+                    category: true,
+                    incomeSource: true
+                }
+            });
+
+            return {
+                ...updatedTx,
+                category: updatedTx.category ? updatedTx.category.name : '',
+                categoryId: updatedTx.categoryId,
+                incomeSource: updatedTx.incomeSource ? updatedTx.incomeSource.name : null,
+                incomeSourceId: updatedTx.incomeSourceId
+            };
+        });
+
+        res.status(200).json({ success: true, data: result });
+    } catch (error) {
+        console.error('UPDATE TRANSACTION ERROR:', error);
+        if (error.message === 'Insufficient funds in the selected asset' || error.message === 'Selected asset not found' || error.message === 'Original associated asset not found') {
+            return res.status(400).json({ success: false, error: error.message });
+        }
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
 export const deleteTransaction = async (req, res) => {
     try {
         const { id } = req.params;
