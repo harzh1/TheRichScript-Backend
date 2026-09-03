@@ -5,14 +5,16 @@ export const getPlans = async (req, res) => {
     try {
         const plans = await prisma.plannedExpense.findMany({
             where: { userId: req.user.userId },
-            include: { category: true }
+            include: { category: true, asset: true, targetAsset: true }
         });
 
-        // Flatten category for frontend compatibility
+        // Flatten category and asset names for frontend compatibility
         const flatPlans = plans.map(plan => ({
             ...plan,
             category: plan.category.name,
-            categoryId: plan.categoryId
+            categoryId: plan.categoryId,
+            sourceAssetName: plan.asset?.name || null,
+            targetAssetName: plan.targetAsset?.name || null
         }));
 
         res.status(200).json({ success: true, data: flatPlans });
@@ -41,13 +43,19 @@ export const createPlan = async (req, res) => {
                     ...(frequency && { frequency: frequency.toUpperCase() }),
                     ...(nextDueDate && { nextDueDate: new Date(nextDueDate) })
                 },
-                include: { category: true }
+                include: { category: true, asset: true, targetAsset: true }
             });
         });
 
         res.status(201).json({
             success: true,
-            data: { ...plan, category: plan.category.name, categoryId: plan.categoryId }
+            data: {
+                ...plan,
+                category: plan.category.name,
+                categoryId: plan.categoryId,
+                sourceAssetName: plan.asset?.name || null,
+                targetAssetName: plan.targetAsset?.name || null
+            }
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -86,13 +94,19 @@ export const updatePlan = async (req, res) => {
 
             return tx.plannedExpense.findUnique({
                 where: { id },
-                include: { category: true }
+                include: { category: true, asset: true, targetAsset: true }
             });
         });
 
         res.status(200).json({
             success: true,
-            data: { ...result, category: result.category.name, categoryId: result.categoryId }
+            data: {
+                ...result,
+                category: result.category.name,
+                categoryId: result.categoryId,
+                sourceAssetName: result.asset?.name || null,
+                targetAssetName: result.targetAsset?.name || null
+            }
         });
     } catch (error) {
         if (error.message === 'Plan not found or already deleted') {

@@ -8,6 +8,7 @@ export const createPlanSchema = z.object({
     category: z.string().min(1, 'Category is required'),
     amount: z.coerce.number().positive('Amount must be greater than 0'),
     type: z.enum(['MANUAL', 'RECURRING'], { required_error: 'Type must be MANUAL or RECURRING' }),
+    txType: z.enum(['EXPENSE', 'INCOME', 'TRANSFER']).optional().nullable(),
     frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']).optional().nullable(),
     nextDueDate: z.string().optional().nullable()
   }).refine(data => {
