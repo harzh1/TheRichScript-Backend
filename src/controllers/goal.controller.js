@@ -300,7 +300,7 @@ export const updateGoal = async (req, res) => {
 export const deleteGoal = async (req, res) => {
     try {
         const { id } = req.params;
-        const { refundAssetId } = req.body;
+        const { refundAssetId } = req.body || {};
 
         const goal = await prisma.goal.findUnique({
             where: { id, userId: req.user.userId }
@@ -310,42 +310,99 @@ export const deleteGoal = async (req, res) => {
             return res.status(404).json({ success: false, error: 'Goal not found or already deleted' });
         }
 
-        if (goal.currentAmount > 0 && !goal.targetAssetId) {
+        const balance = goal.currentAmount || 0;
+
+        if (balance > 0) {
             if (!refundAssetId) {
-                return res.status(400).json({ success: false, error: 'Refund asset ID is required because the goal has a balance.' });
+                return res.status(400).json({ success: false, error: 'Refund asset is required because the goal has a saved balance.' });
             }
 
-            const asset = await prisma.asset.findUnique({
+            const refundAsset = await prisma.asset.findUnique({
                 where: { id: refundAssetId, userId: req.user.userId }
             });
 
-            if (!asset) {
-                return res.status(404).json({ success: false, error: 'Refund asset not found' });
+            if (!refundAsset) {
+                return res.status(404).json({ success: false, error: 'Refund destination account not found.' });
             }
 
-            await prisma.$transaction(async (tx) => {
-                const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL REFUND');
-
-                // GoalImage cascade-deletes automatically
-                await tx.goal.delete({ where: { id } });
-
-                await tx.asset.update({
-                    where: { id: refundAssetId },
-                    data: { value: asset.value + goal.currentAmount }
+            if (goal.targetAssetId) {
+                // The goal's funds were deposited into a target asset account
+                const holdingAsset = await prisma.asset.findUnique({
+                    where: { id: goal.targetAssetId, userId: req.user.userId }
                 });
 
-                await tx.transaction.create({
-                    data: {
-                        userId: req.user.userId,
-                        assetId: refundAssetId,
-                        type: 'INCOME',
-                        amount: goal.currentAmount,
-                        categoryId,
-                        description: `Refund from deleted goal: ${goal.name}`,
-                        date: new Date()
+                if (!holdingAsset || holdingAsset.value <= 0) {
+                    return res.status(400).json({
+                        success: false,
+                        error: `There is no money in the linked account (${holdingAsset?.name || 'Account'}) to process the refund.`
+                    });
+                }
+
+                if (holdingAsset.value < balance) {
+                    return res.status(400).json({
+                        success: false,
+                        error: `Not enough money in ${holdingAsset.name} to refund the goal balance. Required: ${balance}, Available: ${holdingAsset.value}.`
+                    });
+                }
+
+                await prisma.$transaction(async (tx) => {
+                    const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL REFUND');
+
+                    // GoalImage cascade-deletes automatically
+                    await tx.goal.delete({ where: { id } });
+
+                    if (goal.targetAssetId !== refundAssetId) {
+                        // Transfer from holding asset to destination refund asset
+                        await tx.asset.update({
+                            where: { id: goal.targetAssetId },
+                            data: { value: holdingAsset.value - balance }
+                        });
+
+                        await tx.asset.update({
+                            where: { id: refundAssetId },
+                            data: { value: refundAsset.value + balance }
+                        });
+
+                        await tx.transaction.create({
+                            data: {
+                                userId: req.user.userId,
+                                assetId: goal.targetAssetId,
+                                toAssetId: refundAssetId,
+                                type: 'TRANSFER',
+                                amount: balance,
+                                categoryId,
+                                description: `Refund transfer from deleted goal: ${goal.name}`,
+                                date: new Date()
+                            }
+                        });
                     }
                 });
-            });
+            } else {
+                // Goal funds were held in abstract goal pool (expense deduction)
+                await prisma.$transaction(async (tx) => {
+                    const categoryId = await resolveCategoryId(tx, req.user.userId, 'GOAL REFUND');
+
+                    // GoalImage cascade-deletes automatically
+                    await tx.goal.delete({ where: { id } });
+
+                    await tx.asset.update({
+                        where: { id: refundAssetId },
+                        data: { value: refundAsset.value + balance }
+                    });
+
+                    await tx.transaction.create({
+                        data: {
+                            userId: req.user.userId,
+                            assetId: refundAssetId,
+                            type: 'INCOME',
+                            amount: balance,
+                            categoryId,
+                            description: `Refund from deleted goal: ${goal.name}`,
+                            date: new Date()
+                        }
+                    });
+                });
+            }
         } else {
             // GoalImage cascade-deletes automatically
             await prisma.goal.delete({ where: { id } });

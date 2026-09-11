@@ -206,7 +206,7 @@ export const updatePassword = async (req, res) => {
 
 export const deleteAccount = async (req, res) => {
     try {
-        const { password } = req.body;
+        const { password } = req.body || {};
         if (!password) {
             return res.status(400).json({ success: false, error: 'Password is required to delete your account.' });
         }
