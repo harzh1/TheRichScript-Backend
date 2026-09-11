@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import prisma from '../config/db.js';
 import { config } from '../config/config.js';
@@ -12,6 +13,25 @@ export const sanitizeUser = (user) => ({
     currency: user.currency,
     avatarUrl: user.avatarUrl || null
 });
+
+export const generateAuthTokens = async (userId) => {
+    const accessToken = jwt.sign({ userId }, config.jwtSecret, { expiresIn: config.jwtAccessExpiration });
+    const refreshToken = crypto.randomBytes(40).toString('hex');
+    const refreshExpiresAt = new Date(Date.now() + config.jwtRefreshExpirationDays * 24 * 60 * 60 * 1000);
+
+    await prisma.refreshToken.create({
+        data: {
+            token: refreshToken,
+            userId,
+            expiresAt: refreshExpiresAt
+        }
+    });
+
+    return {
+        accessToken,
+        refreshToken
+    };
+};
 
 export const register = async (req, res) => {
     try {
@@ -35,12 +55,14 @@ export const register = async (req, res) => {
             }
         });
 
-        const token = jwt.sign({ userId: user.id }, config.jwtSecret, { expiresIn: '7d' });
+        const { accessToken, refreshToken } = await generateAuthTokens(user.id);
 
         res.status(201).json({ 
             success: true, 
             message: 'User created successfully', 
-            token,
+            token: accessToken,
+            accessToken,
+            refreshToken,
             user: sanitizeUser(user),
             data: sanitizeUser(user)
         });
@@ -58,11 +80,13 @@ export const login = async (req, res) => {
             return res.status(401).json({ success: false, error: 'Invalid email or password.' });
         }
 
-        const token = jwt.sign({ userId: user.id }, config.jwtSecret, { expiresIn: '7d' });
+        const { accessToken, refreshToken } = await generateAuthTokens(user.id);
 
         res.status(200).json({
             success: true,
-            token,
+            token: accessToken,
+            accessToken,
+            refreshToken,
             user: sanitizeUser(user),
             data: sanitizeUser(user)
         });
@@ -230,6 +254,9 @@ export const deleteAccount = async (req, res) => {
             prisma.userAssetType.deleteMany({
                 where: { userId }
             }),
+            prisma.refreshToken.deleteMany({
+                where: { userId }
+            }),
             prisma.user.delete({
                 where: { id: userId }
             })
@@ -241,6 +268,80 @@ export const deleteAccount = async (req, res) => {
         });
     } catch (error) {
         console.error('Error deleting account:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+export const refreshTokenHandler = async (req, res) => {
+    try {
+        const { refreshToken } = req.body;
+
+        if (!refreshToken) {
+            return res.status(400).json({ success: false, error: 'Refresh token is required.' });
+        }
+
+        const tokenRecord = await prisma.refreshToken.findUnique({
+            where: { token: refreshToken },
+            include: { user: true }
+        });
+
+        if (!tokenRecord || tokenRecord.revoked || tokenRecord.expiresAt < new Date()) {
+            return res.status(401).json({ success: false, error: 'Invalid or expired refresh token.' });
+        }
+
+        if (!tokenRecord.user) {
+            return res.status(401).json({ success: false, error: 'Associated user no longer exists.' });
+        }
+
+        // Token Rotation: revoke/delete the used refresh token and issue a fresh pair
+        const newRefreshToken = crypto.randomBytes(40).toString('hex');
+        const newRefreshExpiresAt = new Date(Date.now() + config.jwtRefreshExpirationDays * 24 * 60 * 60 * 1000);
+        const newAccessToken = jwt.sign({ userId: tokenRecord.userId }, config.jwtSecret, { expiresIn: config.jwtAccessExpiration });
+
+        await prisma.$transaction([
+            prisma.refreshToken.delete({
+                where: { id: tokenRecord.id }
+            }),
+            prisma.refreshToken.create({
+                data: {
+                    token: newRefreshToken,
+                    userId: tokenRecord.userId,
+                    expiresAt: newRefreshExpiresAt
+                }
+            })
+        ]);
+
+        res.status(200).json({
+            success: true,
+            message: 'Token refreshed successfully',
+            token: newAccessToken,
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken,
+            user: sanitizeUser(tokenRecord.user),
+            data: sanitizeUser(tokenRecord.user)
+        });
+    } catch (error) {
+        console.error('Error refreshing token:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+export const logoutHandler = async (req, res) => {
+    try {
+        const { refreshToken } = req.body;
+
+        if (refreshToken) {
+            await prisma.refreshToken.deleteMany({
+                where: { token: refreshToken }
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Logged out successfully'
+        });
+    } catch (error) {
+        console.error('Error during logout:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
