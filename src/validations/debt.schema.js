@@ -7,6 +7,8 @@ export const createDebtSchema = z.object({
     person: z.string().optional(),
     personName: z.string().optional(),
     amount: z.coerce.number().positive('Amount must be greater than 0'),
+    currency: z.string().length(3, 'Currency must be a 3-letter ISO code').toUpperCase().optional(),
+    exchangeRate: z.coerce.number().positive('Exchange rate must be positive').optional(),
     dueDate: z.string().optional(),
     contactId: z.string().uuid('Invalid Contact ID').optional().nullable(),
     notes: z.string().optional().nullable()
@@ -22,7 +24,9 @@ export const settleDebtSchema = z.object({
   }),
   body: z.object({
     amount: z.coerce.number().positive('Amount must be greater than 0'),
-    assetId: z.string().uuid('Invalid Asset ID')
+    assetId: z.string().uuid('Invalid Asset ID'),
+    settleAssetAmount: z.coerce.number().positive('Settle asset amount must be positive').optional(),
+    exchangeRate: z.coerce.number().positive('Exchange rate must be positive').optional()
   })
 });
 
@@ -36,6 +40,7 @@ export const updateDebtSchema = z.object({
     person: z.string().optional(),
     personName: z.string().optional(),
     amount: z.coerce.number().positive('Amount must be greater than 0').optional(),
+    currency: z.string().length(3, 'Currency must be a 3-letter ISO code').toUpperCase().optional(),
     dueDate: z.string().optional().nullable(),
     contactId: z.string().uuid('Invalid Contact ID').optional().nullable(),
     notes: z.string().optional().nullable()

@@ -1,34 +1,53 @@
 import prisma from '../config/db.js';
+import { convertAmount } from '../services/fx.service.js';
 
 export const getAnalyticsSummary = async (req, res) => {
     try {
         const userId = req.user.userId;
 
-        // 1. Total Portfolio Value (Assets)
-        const assetsAggregate = await prisma.asset.aggregate({
-            where: { userId },
-            _sum: { value: true }
+        // Fetch user's reporting currency
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { currency: true }
         });
-        const totalPortfolioValue = parseFloat(assetsAggregate._sum.value) || 0;
+        const userCurrency = user?.currency || 'INR';
 
-        // 2. Total Income and Expenses
+        // 1. Total Portfolio Value (Assets converted to user's reporting currency at spot rate)
+        const assets = await prisma.asset.findMany({
+            where: { userId },
+            select: { value: true, currency: true }
+        });
+
+        let totalPortfolioValue = 0;
+        for (const asset of assets) {
+            const val = parseFloat(asset.value) || 0;
+            if (asset.currency === userCurrency) {
+                totalPortfolioValue += val;
+            } else {
+                const conv = await convertAmount(val, asset.currency, userCurrency);
+                totalPortfolioValue += conv.convertedAmount;
+            }
+        }
+        totalPortfolioValue = parseFloat(totalPortfolioValue.toFixed(4));
+
+        // 2. Total Income and Expenses (Aggregated on normalized baseAmount)
         const txAggregate = await prisma.transaction.groupBy({
             by: ['type'],
             where: { userId },
-            _sum: { amount: true }
+            _sum: { baseAmount: true }
         });
 
         let totalIncome = 0;
         let totalExpense = 0;
 
         txAggregate.forEach(group => {
-            if (group.type === 'INCOME') totalIncome = parseFloat(group._sum.amount) || 0;
-            if (group.type === 'EXPENSE') totalExpense = parseFloat(group._sum.amount) || 0;
+            if (group.type === 'INCOME') totalIncome = parseFloat(group._sum.baseAmount) || 0;
+            if (group.type === 'EXPENSE') totalExpense = parseFloat(group._sum.baseAmount) || 0;
         });
 
-        const balance = totalIncome - totalExpense;
+        const balance = parseFloat((totalIncome - totalExpense).toFixed(4));
 
-        // 3. Expenses By Category (All Time, Monthly, Yearly)
+        // 3. Expenses By Category (All Time, Monthly, Yearly - using baseAmount)
         const tzOffset = parseInt(req.query.tzOffset || '0');
         const toClientDate = (date) => new Date(new Date(date).getTime() - (tzOffset * 60 * 1000));
 
@@ -53,23 +72,23 @@ export const getAnalyticsSummary = async (req, res) => {
         const startOfYearPseudo = new Date(Date.UTC(targetYear, 0, 1));
         const startOfYear = new Date(startOfYearPseudo.getTime() + (tzOffset * 60 * 1000));
 
-        // Group by categoryId, then resolve names
+        // Group by categoryId, then resolve names (aggregating on baseAmount)
         const allTimeExpenses = await prisma.transaction.groupBy({
             by: ['categoryId'],
             where: { userId, type: 'EXPENSE' },
-            _sum: { amount: true }
+            _sum: { baseAmount: true }
         });
 
         const yearlyExpenses = await prisma.transaction.groupBy({
             by: ['categoryId'],
             where: { userId, type: 'EXPENSE', date: { gte: startOfYear } },
-            _sum: { amount: true }
+            _sum: { baseAmount: true }
         });
 
         const monthlyExpenses = await prisma.transaction.groupBy({
             by: ['categoryId'],
             where: { userId, type: 'EXPENSE', date: { gte: startOfMonth, lte: endOfMonth } },
-            _sum: { amount: true }
+            _sum: { baseAmount: true }
         });
 
         // Collect all unique category IDs and batch-fetch their names
@@ -92,19 +111,19 @@ export const getAnalyticsSummary = async (req, res) => {
         allTimeExpenses.forEach(g => {
             const cat = categoryNameMap[g.categoryId] || 'UNKNOWN';
             if (!expensesByCategory[cat]) expensesByCategory[cat] = { allTime: 0, monthly: 0, yearly: 0, last30Days: 0 };
-            expensesByCategory[cat].allTime = parseFloat(g._sum.amount) || 0;
+            expensesByCategory[cat].allTime = parseFloat(g._sum.baseAmount) || 0;
         });
 
         yearlyExpenses.forEach(g => {
             const cat = categoryNameMap[g.categoryId] || 'UNKNOWN';
             if (!expensesByCategory[cat]) expensesByCategory[cat] = { allTime: 0, monthly: 0, yearly: 0, last30Days: 0 };
-            expensesByCategory[cat].yearly = parseFloat(g._sum.amount) || 0;
+            expensesByCategory[cat].yearly = parseFloat(g._sum.baseAmount) || 0;
         });
 
         monthlyExpenses.forEach(g => {
             const cat = categoryNameMap[g.categoryId] || 'UNKNOWN';
             if (!expensesByCategory[cat]) expensesByCategory[cat] = { allTime: 0, monthly: 0, yearly: 0 };
-            expensesByCategory[cat].monthly = parseFloat(g._sum.amount) || 0;
+            expensesByCategory[cat].monthly = parseFloat(g._sum.baseAmount) || 0;
         });
 
         categories.forEach(c => {
@@ -118,18 +137,18 @@ export const getAnalyticsSummary = async (req, res) => {
         const currentMonthAgg = await prisma.transaction.groupBy({
             by: ['type'],
             where: { userId, date: { gte: startOfMonth, lte: endOfMonth } },
-            _sum: { amount: true }
+            _sum: { baseAmount: true }
         });
 
         let monthIncome = 0;
         let monthExpense = 0;
         
         currentMonthAgg.forEach(group => {
-            if (group.type === 'INCOME') monthIncome = parseFloat(group._sum.amount) || 0;
-            if (group.type === 'EXPENSE') monthExpense = parseFloat(group._sum.amount) || 0;
+            if (group.type === 'INCOME') monthIncome = parseFloat(group._sum.baseAmount) || 0;
+            if (group.type === 'EXPENSE') monthExpense = parseFloat(group._sum.baseAmount) || 0;
         });
 
-        // 4. Monthly Trends (Last 6 Months)
+        // 4. Monthly Trends (Last 6 Months using baseAmount)
         const sixMonthsAgoPseudo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1));
         const sixMonthsAgo = new Date(sixMonthsAgoPseudo.getTime() + (tzOffset * 60 * 1000));
         
@@ -138,7 +157,7 @@ export const getAnalyticsSummary = async (req, res) => {
                 userId,
                 date: { gte: sixMonthsAgo }
             },
-            select: { type: true, amount: true, date: true }
+            select: { type: true, baseAmount: true, date: true }
         });
 
         const monthlyTrendsMap = {};
@@ -161,9 +180,9 @@ export const getAnalyticsSummary = async (req, res) => {
             const key = `${txDate.getUTCFullYear()}-${txDate.getUTCMonth()}`;
             if (monthlyTrendsMap[key]) {
                 if (tx.type === 'INCOME') {
-                    monthlyTrendsMap[key].income += parseFloat(tx.amount);
+                    monthlyTrendsMap[key].income += parseFloat(tx.baseAmount);
                 } else if (tx.type === 'EXPENSE') {
-                    monthlyTrendsMap[key].expense += parseFloat(tx.amount);
+                    monthlyTrendsMap[key].expense += parseFloat(tx.baseAmount);
                 }
             }
         });
@@ -173,14 +192,14 @@ export const getAnalyticsSummary = async (req, res) => {
             return a.monthIndex - b.monthIndex;
         }).map(item => ({ label: item.label, income: item.income, expense: item.expense }));
 
-        // 5. Daily Spending for the Selected Month
+        // 5. Daily Spending for the Selected Month (using baseAmount)
         const monthTx = await prisma.transaction.findMany({
             where: {
                 userId,
                 type: 'EXPENSE',
                 date: { gte: startOfMonth, lte: endOfMonth }
             },
-            select: { amount: true, date: true, categoryId: true }
+            select: { baseAmount: true, date: true, categoryId: true }
         });
 
         const monthDailyMap = {};
@@ -199,10 +218,10 @@ export const getAnalyticsSummary = async (req, res) => {
             const d = toClientDate(tx.date);
             const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
             if (monthDailyMap[key]) {
-                monthDailyMap[key].expense += parseFloat(tx.amount);
+                monthDailyMap[key].expense += parseFloat(tx.baseAmount);
                 const catName = categoryNameMap[tx.categoryId] || 'UNKNOWN';
                 if (!monthDailyMap[key][catName]) monthDailyMap[key][catName] = 0;
-                monthDailyMap[key][catName] += parseFloat(tx.amount);
+                monthDailyMap[key][catName] += parseFloat(tx.baseAmount);
             }
         });
 
@@ -211,6 +230,7 @@ export const getAnalyticsSummary = async (req, res) => {
         res.status(200).json({
             success: true,
             data: {
+                currency: userCurrency,
                 totalPortfolioValue,
                 totalIncome,
                 totalExpense,

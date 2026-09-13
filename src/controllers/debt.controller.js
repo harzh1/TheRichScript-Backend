@@ -1,4 +1,5 @@
 import prisma from '../config/db.js';
+import { convertAmount } from '../services/fx.service.js';
 
 export const getDebts = async (req, res) => {
     try {
@@ -13,10 +14,28 @@ export const getDebts = async (req, res) => {
 
 export const createDebt = async (req, res) => {
     try {
-        const { assetId, type, person, personName, amount, dueDate, contactId, notes } = req.body;
+        const { assetId, type, person, personName, amount, currency, exchangeRate, dueDate, contactId, notes } = req.body;
         const parsedAmount = parseFloat(amount);
 
         const result = await prisma.$transaction(async (tx) => {
+            const asset = await tx.asset.findUnique({ where: { id: assetId } });
+            if (!asset) throw new Error('Asset not found');
+
+            const user = await tx.user.findUnique({ where: { id: req.user.userId }, select: { currency: true } });
+            const userCurrency = user?.currency || 'INR';
+
+            const debtCurrency = currency ? currency.trim().toUpperCase() : asset.currency;
+
+            // Compute impact on asset in asset's native currency
+            let assetImpact = parsedAmount;
+            let finalRate = 1.0;
+
+            if (debtCurrency !== asset.currency) {
+                const conv = await convertAmount(parsedAmount, debtCurrency, asset.currency, exchangeRate);
+                assetImpact = conv.convertedAmount;
+                finalRate = conv.exchangeRate;
+            }
+
             const debt = await tx.debt.create({
                 data: {
                     userId: req.user.userId,
@@ -24,23 +43,28 @@ export const createDebt = async (req, res) => {
                     type: type.toUpperCase(),
                     personName: person || personName,
                     amount: parsedAmount,
+                    currency: debtCurrency,
                     ...(dueDate ? { dueDate: new Date(dueDate) } : {}),
                     ...(contactId && { contactId }),
                     ...(notes && { notes })
                 }
             });
 
-            // Adjust Asset Balance
-            const asset = await tx.asset.findUnique({ where: { id: assetId } });
-            if (asset) {
-                const newBalance = type.toUpperCase() === 'LENT' 
-                    ? parseFloat(asset.value) - parsedAmount 
-                    : parseFloat(asset.value) + parsedAmount;
-                
-                await tx.asset.update({
-                    where: { id: assetId },
-                    data: { value: newBalance }
-                });
+            // Adjust Asset Balance in asset's native currency
+            const newBalance = type.toUpperCase() === 'LENT' 
+                ? parseFloat(asset.value) - assetImpact 
+                : parseFloat(asset.value) + assetImpact;
+            
+            await tx.asset.update({
+                where: { id: assetId },
+                data: { value: newBalance }
+            });
+
+            // Compute baseAmount in user's reporting currency
+            let baseAmount = parsedAmount;
+            if (debtCurrency !== userCurrency) {
+                const userConv = await convertAmount(parsedAmount, debtCurrency, userCurrency);
+                baseAmount = userConv.convertedAmount;
             }
 
             // Create Ledger Transaction
@@ -52,6 +76,9 @@ export const createDebt = async (req, res) => {
                     assetId,
                     type: type.toUpperCase() === 'LENT' ? 'EXPENSE' : 'INCOME',
                     amount: parsedAmount,
+                    currency: debtCurrency,
+                    exchangeRate: finalRate,
+                    baseAmount,
                     description: txDescription,
                     date: debt.createdAt,
                     linkedDebtId: debt.id,
@@ -64,6 +91,9 @@ export const createDebt = async (req, res) => {
 
         res.status(201).json({ success: true, data: result });
     } catch (error) {
+        if (error.message === 'Asset not found') {
+            return res.status(400).json({ success: false, error: error.message });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -71,7 +101,7 @@ export const createDebt = async (req, res) => {
 export const settleDebt = async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount, assetId } = req.body;
+        const { amount, assetId, settleAssetAmount, exchangeRate } = req.body;
         const parsedAmount = parseFloat(amount);
 
         const result = await prisma.$transaction(async (tx) => {
@@ -81,6 +111,30 @@ export const settleDebt = async (req, res) => {
             if (debt.status === 'EXPIRED') throw new Error('Cannot settle a written-off debt');
             if (parsedAmount > (parseFloat(debt.amount) - parseFloat(debt.settledAmount))) throw new Error('Settle amount exceeds remaining balance');
 
+            const asset = await tx.asset.findUnique({ where: { id: assetId } });
+            if (!asset) throw new Error('Asset not found');
+
+            const user = await tx.user.findUnique({ where: { id: req.user.userId }, select: { currency: true } });
+            const userCurrency = user?.currency || 'INR';
+
+            // Calculate settlement asset impact
+            let assetImpact = parsedAmount;
+            let finalRate = 1.0;
+
+            if (debt.currency !== asset.currency) {
+                if (settleAssetAmount !== undefined && settleAssetAmount !== null) {
+                    assetImpact = parseFloat(settleAssetAmount);
+                    finalRate = exchangeRate ? parseFloat(exchangeRate) : parseFloat((assetImpact / parsedAmount).toFixed(6));
+                } else if (exchangeRate !== undefined && exchangeRate !== null) {
+                    finalRate = parseFloat(exchangeRate);
+                    assetImpact = parseFloat((parsedAmount * finalRate).toFixed(4));
+                } else {
+                    const conv = await convertAmount(parsedAmount, debt.currency, asset.currency);
+                    assetImpact = conv.convertedAmount;
+                    finalRate = conv.exchangeRate;
+                }
+            }
+
             const newSettledAmount = parseFloat(debt.settledAmount) + parsedAmount;
             const status = newSettledAmount >= parseFloat(debt.amount) ? 'SETTLED' : 'ACTIVE';
 
@@ -89,16 +143,21 @@ export const settleDebt = async (req, res) => {
                 data: { settledAmount: newSettledAmount, status }
             });
 
-            const asset = await tx.asset.findUnique({ where: { id: assetId } });
-            if (asset) {
-                const newBalance = debt.type === 'LENT'
-                    ? parseFloat(asset.value) + parsedAmount
-                    : parseFloat(asset.value) - parsedAmount;
-                
-                await tx.asset.update({
-                    where: { id: assetId },
-                    data: { value: newBalance }
-                });
+            // Adjust asset balance in asset currency
+            const newBalance = debt.type === 'LENT'
+                ? parseFloat(asset.value) + assetImpact
+                : parseFloat(asset.value) - assetImpact;
+            
+            await tx.asset.update({
+                where: { id: assetId },
+                data: { value: newBalance }
+            });
+
+            // Compute baseAmount in user's reporting currency
+            let baseAmount = parsedAmount;
+            if (debt.currency !== userCurrency) {
+                const userConv = await convertAmount(parsedAmount, debt.currency, userCurrency);
+                baseAmount = userConv.convertedAmount;
             }
 
             // Create Ledger Transaction for Settlement
@@ -110,6 +169,9 @@ export const settleDebt = async (req, res) => {
                     assetId,
                     type: debt.type === 'LENT' ? 'INCOME' : 'EXPENSE',
                     amount: parsedAmount,
+                    currency: debt.currency,
+                    exchangeRate: finalRate,
+                    baseAmount,
                     description: txDescription,
                     date: new Date(),
                     linkedDebtId: debt.id,
@@ -122,7 +184,7 @@ export const settleDebt = async (req, res) => {
 
         res.status(200).json({ success: true, data: result });
     } catch (error) {
-        if (error.message === 'Debt is already fully settled' || error.message === 'Cannot settle a written-off debt' || error.message === 'Settle amount exceeds remaining balance' || error.message === 'Debt not found') {
+        if (error.message === 'Debt is already fully settled' || error.message === 'Cannot settle a written-off debt' || error.message === 'Settle amount exceeds remaining balance' || error.message === 'Debt not found' || error.message === 'Asset not found') {
             return res.status(400).json({ success: false, error: error.message });
         }
         res.status(500).json({ success: false, error: error.message });
@@ -162,7 +224,7 @@ export const writeOffDebt = async (req, res) => {
 export const updateDebt = async (req, res) => {
     try {
         const { id } = req.params;
-        const { assetId, type, person, personName, amount, dueDate, contactId, notes } = req.body;
+        const { assetId, type, person, personName, amount, currency, dueDate, contactId, notes } = req.body;
         const parsedAmount = amount !== undefined ? parseFloat(amount) : undefined;
 
         const result = await prisma.$transaction(async (tx) => {
@@ -200,6 +262,7 @@ export const updateDebt = async (req, res) => {
                     ...(newType && { type: newType }),
                     ...(finalPersonName && { personName: finalPersonName }),
                     ...(newAmount !== undefined && { amount: newAmount }),
+                    ...(currency && { currency: currency.trim().toUpperCase() }),
                     ...(dueDate !== undefined ? { dueDate: dueDate ? new Date(dueDate) : null } : {}),
                     ...(contactId !== undefined && { contactId: contactId || null }),
                     ...(notes !== undefined && { notes: notes || null })

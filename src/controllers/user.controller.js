@@ -9,8 +9,8 @@ export const updateSettings = async (req, res) => {
         const updateData = {};
         if (firstName) updateData.firstName = firstName;
         if (lastName !== undefined) updateData.lastName = lastName;
-        if (country) updateData.country = country;
-        if (currency) updateData.currency = currency;
+        if (country) updateData.country = country.trim().toUpperCase();
+        if (currency) updateData.currency = currency.trim().toUpperCase();
 
         const user = await prisma.user.update({
             where: { id: req.user.userId },
@@ -47,36 +47,17 @@ export const resetUserData = async (req, res) => {
         const userId = req.user.userId;
 
         await prisma.$transaction([
-            prisma.goalImage.deleteMany({
-                where: { goal: { userId } }
-            }),
-            prisma.goal.deleteMany({
-                where: { userId }
-            }),
-            prisma.plannedExpense.deleteMany({
-                where: { userId }
-            }),
-            prisma.transaction.deleteMany({
-                where: { userId }
-            }),
-            prisma.debt.deleteMany({
-                where: { userId }
-            }),
-            prisma.categoryLimit.deleteMany({
-                where: { userId }
-            }),
-            prisma.incomeSource.deleteMany({
-                where: { userId }
-            }),
-            prisma.asset.deleteMany({
-                where: { userId }
-            }),
-            prisma.userCategory.deleteMany({
-                where: { userId }
-            }),
-            prisma.userAssetType.deleteMany({
-                where: { userId }
-            })
+            prisma.notification.deleteMany({ where: { userId } }),
+            prisma.auditLog.deleteMany({ where: { userId } }),
+            prisma.goal.deleteMany({ where: { userId } }),
+            prisma.plannedExpense.deleteMany({ where: { userId } }),
+            prisma.transaction.deleteMany({ where: { userId } }),
+            prisma.debt.deleteMany({ where: { userId } }),
+            prisma.contact.deleteMany({ where: { userId } }),
+            prisma.incomeSource.deleteMany({ where: { userId } }),
+            prisma.asset.deleteMany({ where: { userId } }),
+            prisma.userCategory.deleteMany({ where: { userId } }),
+            prisma.userAssetType.deleteMany({ where: { userId } })
         ]);
 
         res.status(200).json({

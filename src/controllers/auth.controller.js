@@ -53,8 +53,8 @@ export const register = async (req, res) => {
                 lastName,
                 email,
                 passwordHash: hashedPassword,
-                country: country || 'IN',
-                currency: currency || 'INR'
+                country: country ? country.trim().toUpperCase() : 'IN',
+                currency: currency ? currency.trim().toUpperCase() : 'INR'
             }
         });
 

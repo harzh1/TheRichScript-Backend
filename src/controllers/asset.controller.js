@@ -1,4 +1,5 @@
 import prisma from '../config/db.js';
+import { convertAmount } from '../services/fx.service.js';
 
 /**
  * Helper: Resolves an asset type name to its UserAssetType id,
@@ -40,10 +41,19 @@ export const getAssets = async (req, res) => {
 
 export const createAsset = async (req, res) => {
     try {
-        const { name, type, value, quantity } = req.body;
+        const { name, type, value, quantity, currency } = req.body;
         
         const asset = await prisma.$transaction(async (tx) => {
             const typeId = await resolveAssetTypeId(tx, req.user.userId, type);
+
+            let assetCurrency = currency ? currency.trim().toUpperCase() : null;
+            if (!assetCurrency) {
+                const user = await tx.user.findUnique({
+                    where: { id: req.user.userId },
+                    select: { currency: true }
+                });
+                assetCurrency = user?.currency || 'INR';
+            }
 
             return tx.asset.create({
                 data: {
@@ -51,7 +61,8 @@ export const createAsset = async (req, res) => {
                     name,
                     typeId,
                     value: parseFloat(value) || 0,
-                    quantity: quantity ? parseFloat(quantity) : null
+                    quantity: quantity ? parseFloat(quantity) : null,
+                    currency: assetCurrency
                 },
                 include: { assetType: true }
             });
@@ -69,7 +80,7 @@ export const createAsset = async (req, res) => {
 export const updateAsset = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, value, quantity, type } = req.body;
+        const { name, value, quantity, type, currency } = req.body;
 
         const result = await prisma.$transaction(async (tx) => {
             const updateData = {};
@@ -77,6 +88,7 @@ export const updateAsset = async (req, res) => {
             if (name) updateData.name = name;
             if (value !== undefined) updateData.value = parseFloat(value);
             if (quantity !== undefined) updateData.quantity = quantity ? parseFloat(quantity) : null;
+            if (currency) updateData.currency = currency.trim().toUpperCase();
             if (type) {
                 updateData.typeId = await resolveAssetTypeId(tx, req.user.userId, type);
             }
@@ -140,7 +152,7 @@ export const getAssetTypes = async (req, res) => {
 
 export const transferAsset = async (req, res) => {
     try {
-        const { fromAssetId, toAssetId, amount, date, description, category } = req.body;
+        const { fromAssetId, toAssetId, amount, destinationAmount, exchangeRate, date, description, category } = req.body;
         const transferAmount = parseFloat(amount);
 
         if (fromAssetId === toAssetId) {
@@ -159,21 +171,52 @@ export const transferAsset = async (req, res) => {
                 throw new Error('Insufficient funds in source asset');
             }
 
-            // Update balances
+            // Calculate destination amount and conversion rate
+            let finalDestAmount = transferAmount;
+            let finalRate = 1.0;
+
+            if (fromAsset.currency !== toAsset.currency) {
+                if (destinationAmount !== undefined && destinationAmount !== null) {
+                    finalDestAmount = parseFloat(destinationAmount);
+                    finalRate = exchangeRate ? parseFloat(exchangeRate) : parseFloat((finalDestAmount / transferAmount).toFixed(6));
+                } else if (exchangeRate !== undefined && exchangeRate !== null) {
+                    finalRate = parseFloat(exchangeRate);
+                    finalDestAmount = parseFloat((transferAmount * finalRate).toFixed(4));
+                } else {
+                    const conv = await convertAmount(transferAmount, fromAsset.currency, toAsset.currency);
+                    finalDestAmount = conv.convertedAmount;
+                    finalRate = conv.exchangeRate;
+                }
+            }
+
+            // Update source asset balance in its native currency
             await tx.asset.update({
                 where: { id: fromAssetId },
                 data: { value: parseFloat(fromAsset.value) - transferAmount }
             });
 
+            // Update destination asset balance in its native currency
             await tx.asset.update({
                 where: { id: toAssetId },
-                data: { value: parseFloat(toAsset.value) + transferAmount }
+                data: { value: parseFloat(toAsset.value) + finalDestAmount }
             });
+
+            // Calculate normalized baseAmount in user's reporting currency for analytics
+            const user = await tx.user.findUnique({
+                where: { id: req.user.userId },
+                select: { currency: true }
+            });
+            const userCurrency = user?.currency || 'INR';
+            let baseAmount = transferAmount;
+            if (fromAsset.currency !== userCurrency) {
+                const userConv = await convertAmount(transferAmount, fromAsset.currency, userCurrency);
+                baseAmount = userConv.convertedAmount;
+            }
 
             const transferDate = date ? new Date(date) : new Date();
             const transferDesc = description || `Transfer to ${toAsset.name}`;
 
-            // Create a SINGLE transfer transaction for the ledger
+            // Create ledger transfer transaction
             const transaction = await tx.transaction.create({
                 data: {
                     userId: req.user.userId,
@@ -181,6 +224,10 @@ export const transferAsset = async (req, res) => {
                     toAssetId: toAssetId,
                     type: 'TRANSFER',
                     amount: transferAmount,
+                    currency: fromAsset.currency,
+                    exchangeRate: finalRate,
+                    targetAmount: finalDestAmount,
+                    baseAmount,
                     description: transferDesc,
                     date: transferDate
                 }

@@ -18,8 +18,8 @@ model User {
   email           String    @unique
   passwordHash    String
   telegramChatId  String?
-  country         String    @default("IN")
-  currency        String    @default("INR")
+  country         String    @default("IN") @db.VarChar(2)
+  currency        String    @default("INR") @db.VarChar(3)
   avatarUrl       String?
   isActive        Boolean   @default(true)
   lastLoginAt     DateTime?
@@ -85,6 +85,7 @@ model Asset {
   assetType UserAssetType @relation(fields: [typeId], references: [id])
   value     Decimal   @db.Decimal(19, 4)
   quantity  Decimal?  @db.Decimal(19, 4)
+  currency  String    @default("INR") @db.VarChar(3)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -152,6 +153,10 @@ model Transaction {
   toAsset          Asset?          @relation(fields: [toAssetId], references: [id], onDelete: Cascade, name: "TransactionTargetAsset")
   type             TransactionType
   amount           Decimal         @db.Decimal(19, 4)
+  currency         String          @default("INR") @db.VarChar(3)
+  exchangeRate     Decimal         @default(1.000000) @db.Decimal(19, 6)
+  targetAmount     Decimal?        @db.Decimal(19, 4)
+  baseAmount       Decimal         @default(0) @db.Decimal(19, 4)
   categoryId       String?
   category         UserCategory?   @relation(fields: [categoryId], references: [id])
   incomeSourceId   String?
@@ -199,6 +204,7 @@ model PlannedExpense {
   categoryId    String
   category      UserCategory       @relation(fields: [categoryId], references: [id])
   amount        Decimal            @db.Decimal(19, 4)
+  currency      String             @default("INR") @db.VarChar(3)
   type          PlannedExpenseType
   txType        TransactionType    @default(EXPENSE)
   frequency     Frequency?
@@ -218,6 +224,7 @@ model Goal {
   name               String
   targetAmount       Decimal    @db.Decimal(19, 4)
   currentAmount      Decimal    @default(0) @db.Decimal(19, 4)
+  currency           String     @default("INR") @db.VarChar(3)
   expectedDate       DateTime
   isPinned           Boolean    @default(false)
   recurringAmount    Decimal?   @db.Decimal(19, 4)
@@ -260,6 +267,7 @@ model Debt {
   contact       Contact?   @relation(fields: [contactId], references: [id], onDelete: SetNull)
   amount        Decimal    @db.Decimal(19, 4)
   settledAmount Decimal    @default(0) @db.Decimal(19, 4)
+  currency      String     @default("INR") @db.VarChar(3)
   dueDate       DateTime?
   notes         String?
   status        DebtStatus @default(ACTIVE)

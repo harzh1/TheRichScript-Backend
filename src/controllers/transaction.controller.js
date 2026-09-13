@@ -1,6 +1,7 @@
 import prisma from '../config/db.js';
 import { resolveCategoryId } from './category.controller.js';
 import { resolveIncomeSourceId } from './incomeSource.controller.js';
+import { convertAmount } from '../services/fx.service.js';
 
 export const getTransactions = async (req, res) => {
     try {
@@ -77,7 +78,7 @@ export const getTransactions = async (req, res) => {
 
 export const createTransaction = async (req, res) => {
     try {
-        const { assetId, type, amount, category, description, date, incomeSourceId, incomeSource } = req.body;
+        const { assetId, toAssetId, type, amount, currency, exchangeRate, targetAmount, category, description, date, incomeSourceId, incomeSource } = req.body;
         const parsedAmount = parseFloat(amount);
         const receiptImageUrl = req.file ? req.file.path : null;
 
@@ -86,6 +87,18 @@ export const createTransaction = async (req, res) => {
         }
 
         const result = await prisma.$transaction(async (tx) => {
+            // Fetch asset and user
+            const asset = await tx.asset.findUnique({ where: { id: assetId, userId: req.user.userId } });
+            if (!asset) {
+                throw new Error('Asset not found or already deleted');
+            }
+
+            const user = await tx.user.findUnique({ where: { id: req.user.userId }, select: { currency: true } });
+            const userCurrency = user?.currency || 'INR';
+
+            // Resolve transaction currency (defaults to asset currency)
+            const txCurrency = currency ? currency.trim().toUpperCase() : asset.currency;
+
             // Resolve category name → id (auto-creates if needed), null for transfers without category
             const categoryId = category
                 ? await resolveCategoryId(tx, req.user.userId, category)
@@ -101,13 +114,97 @@ export const createTransaction = async (req, res) => {
                 );
             }
 
-            // 1. Create the transaction
+            let assetImpactAmount = parsedAmount;
+            let finalExchangeRate = 1.0;
+            let finalTargetAmount = null;
+
+            if (type.toUpperCase() === 'TRANSFER') {
+                if (toAssetId) {
+                    const toAsset = await tx.asset.findUnique({ where: { id: toAssetId, userId: req.user.userId } });
+                    if (!toAsset) throw new Error('Target asset not found');
+
+                    if (asset.currency !== toAsset.currency) {
+                        if (targetAmount !== undefined && targetAmount !== null) {
+                            finalTargetAmount = parseFloat(targetAmount);
+                            finalExchangeRate = exchangeRate ? parseFloat(exchangeRate) : parseFloat((finalTargetAmount / parsedAmount).toFixed(6));
+                        } else if (exchangeRate !== undefined && exchangeRate !== null) {
+                            finalExchangeRate = parseFloat(exchangeRate);
+                            finalTargetAmount = parseFloat((parsedAmount * finalExchangeRate).toFixed(4));
+                        } else {
+                            const conv = await convertAmount(parsedAmount, asset.currency, toAsset.currency);
+                            finalTargetAmount = conv.convertedAmount;
+                            finalExchangeRate = conv.exchangeRate;
+                        }
+                    } else {
+                        finalTargetAmount = parsedAmount;
+                        finalExchangeRate = 1.0;
+                    }
+
+                    if (parseFloat(asset.value) < parsedAmount) {
+                        throw new Error('Insufficient funds in the selected asset');
+                    }
+
+                    await tx.asset.update({
+                        where: { id: assetId },
+                        data: { value: parseFloat(asset.value) - parsedAmount }
+                    });
+
+                    await tx.asset.update({
+                        where: { id: toAssetId },
+                        data: { value: parseFloat(toAsset.value) + finalTargetAmount }
+                    });
+                } else {
+                    // Transfer out to goal pool or external
+                    if (parseFloat(asset.value) < parsedAmount) {
+                        throw new Error('Insufficient funds in the selected asset');
+                    }
+
+                    await tx.asset.update({
+                        where: { id: assetId },
+                        data: { value: parseFloat(asset.value) - parsedAmount }
+                    });
+                }
+            } else {
+                // INCOME or EXPENSE
+                if (txCurrency !== asset.currency) {
+                    const conv = await convertAmount(parsedAmount, txCurrency, asset.currency, exchangeRate);
+                    assetImpactAmount = conv.convertedAmount;
+                    finalExchangeRate = conv.exchangeRate;
+                }
+
+                if (type.toUpperCase() === 'EXPENSE' && parseFloat(asset.value) < assetImpactAmount) {
+                    throw new Error('Insufficient funds in the selected asset');
+                }
+
+                const newBalance = type.toUpperCase() === 'INCOME'
+                    ? parseFloat(asset.value) + assetImpactAmount
+                    : parseFloat(asset.value) - assetImpactAmount;
+
+                await tx.asset.update({
+                    where: { id: assetId },
+                    data: { value: newBalance }
+                });
+            }
+
+            // Calculate normalized baseAmount in user's reporting currency for analytics
+            let baseAmount = parsedAmount;
+            if (txCurrency !== userCurrency) {
+                const userConv = await convertAmount(parsedAmount, txCurrency, userCurrency);
+                baseAmount = userConv.convertedAmount;
+            }
+
+            // 1. Create the transaction record
             const transaction = await tx.transaction.create({
                 data: {
                     userId: req.user.userId,
                     assetId,
+                    toAssetId: toAssetId || null,
                     type: type.toUpperCase(),
                     amount: parsedAmount,
+                    currency: txCurrency,
+                    exchangeRate: finalExchangeRate,
+                    targetAmount: finalTargetAmount,
+                    baseAmount,
                     categoryId,
                     incomeSourceId: resolvedIncomeSourceId,
                     description: description || '',
@@ -118,26 +215,6 @@ export const createTransaction = async (req, res) => {
                     category: true,
                     incomeSource: true
                 }
-            });
-
-            // 2. Adjust Asset Balance
-            const asset = await tx.asset.findUnique({ where: { id: assetId, userId: req.user.userId } });
-            
-            if (!asset) {
-                throw new Error('Asset not found or already deleted');
-            }
-
-            if (type.toUpperCase() === 'EXPENSE' && parseFloat(asset.value) < parsedAmount) {
-                throw new Error('Insufficient funds in the selected asset');
-            }
-
-            const newBalance = type.toUpperCase() === 'INCOME' 
-                ? parseFloat(asset.value) + parsedAmount 
-                : parseFloat(asset.value) - parsedAmount;
-
-            await tx.asset.update({
-                where: { id: assetId },
-                data: { value: newBalance }
             });
 
             return {
@@ -152,7 +229,7 @@ export const createTransaction = async (req, res) => {
         res.status(201).json({ success: true, data: result });
     } catch (error) {
         console.error('TRANSACTION ERROR:', error);
-        if (error.message === 'Asset not found or already deleted' || error.message === 'Insufficient funds in the selected asset') {
+        if (error.message === 'Asset not found or already deleted' || error.message === 'Target asset not found' || error.message === 'Insufficient funds in the selected asset') {
             return res.status(400).json({ success: false, error: error.message });
         }
         res.status(500).json({ success: false, error: error.message });
@@ -311,7 +388,8 @@ export const deleteTransaction = async (req, res) => {
             if (!targetAsset) {
                 return res.status(400).json({ success: false, error: 'Unable to delete: The target asset no longer exists.' });
             }
-            if (parseFloat(targetAsset.value) < parseFloat(transaction.amount)) {
+            const targetDeduction = parseFloat(transaction.targetAmount) || parseFloat(transaction.amount);
+            if (parseFloat(targetAsset.value) < targetDeduction) {
                 return res.status(400).json({ success: false, error: 'Unable to delete: Reverting this transfer would result in a negative target asset balance.' });
             }
 
@@ -322,14 +400,18 @@ export const deleteTransaction = async (req, res) => {
                 });
                 await tx.asset.update({
                     where: { id: transaction.toAssetId },
-                    data: { value: parseFloat(targetAsset.value) - parseFloat(transaction.amount) }
+                    data: { value: parseFloat(targetAsset.value) - targetDeduction }
                 });
                 await tx.transaction.delete({ where: { id } });
             });
         } else {
+            const assetImpact = (transaction.currency !== asset.currency && transaction.exchangeRate)
+                ? parseFloat(transaction.amount) * parseFloat(transaction.exchangeRate)
+                : parseFloat(transaction.amount);
+
             const revertedBalance = transaction.type === 'INCOME'
-                ? parseFloat(asset.value) - parseFloat(transaction.amount)
-                : parseFloat(asset.value) + parseFloat(transaction.amount);
+                ? parseFloat(asset.value) - assetImpact
+                : parseFloat(asset.value) + assetImpact;
             
             if (transaction.type === 'INCOME' && revertedBalance < 0) {
                 return res.status(400).json({ success: false, error: 'Unable to delete: Reverting this income would result in a negative asset balance.' });

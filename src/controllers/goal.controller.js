@@ -1,4 +1,5 @@
 import prisma from '../config/db.js';
+import { convertAmount } from '../services/fx.service.js';
 
 export const getGoals = async (req, res) => {
     try {
@@ -14,7 +15,7 @@ export const getGoals = async (req, res) => {
 
 export const createGoal = async (req, res) => {
     try {
-        const { name, targetAmount, initialDeposit, assetId, expectedDate, recurringAmount, recurringFrequency, sourceAssetId, targetAssetId, imageUrls } = req.body;
+        const { name, targetAmount, initialDeposit, assetId, expectedDate, recurringAmount, recurringFrequency, currency, sourceAssetId, targetAssetId, imageUrls } = req.body;
         
         let urls = [];
         if (imageUrls) {
@@ -29,6 +30,14 @@ export const createGoal = async (req, res) => {
         let goal;
 
         const fundingAssetId = assetId || sourceAssetId;
+
+        // Fetch user currency for default
+        const user = await prisma.user.findUnique({
+            where: { id: req.user.userId },
+            select: { currency: true }
+        });
+        const userCurrency = user?.currency || 'INR';
+        const goalCurrency = currency ? currency.trim().toUpperCase() : userCurrency;
 
         if (depositAmount > 0) {
             if (!fundingAssetId) {
@@ -47,13 +56,14 @@ export const createGoal = async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Insufficient funds in the selected asset.' });
             }
 
-            const goal = await prisma.$transaction(async (tx) => {
+            goal = await prisma.$transaction(async (tx) => {
                 const newGoal = await tx.goal.create({
                     data: {
                         userId: req.user.userId,
                         name,
                         targetAmount: parseFloat(targetAmount),
                         currentAmount: depositAmount,
+                        currency: goalCurrency,
                         expectedDate: new Date(expectedDate),
                         ...(recurringAmount && { recurringAmount: parseFloat(recurringAmount) }),
                         ...(recurringFrequency && { recurringFrequency: recurringFrequency.toUpperCase() }),
@@ -64,18 +74,34 @@ export const createGoal = async (req, res) => {
                 });
 
                 if (targetAssetId && targetAssetId !== fundingAssetId) {
-                    // Deduct from source asset
+                    const targetAsset = await tx.asset.findUnique({ where: { id: targetAssetId, userId: req.user.userId } });
+                    
+                    let targetCreditedAmount = depositAmount;
+                    let rate = 1.0;
+
+                    if (targetAsset && asset.currency !== targetAsset.currency) {
+                        const conv = await convertAmount(depositAmount, asset.currency, targetAsset.currency);
+                        targetCreditedAmount = conv.convertedAmount;
+                        rate = conv.exchangeRate;
+                    }
+
+                    // Deduct from source asset in its native currency
                     await tx.asset.update({
                         where: { id: fundingAssetId },
                         data: { value: parseFloat(asset.value) - depositAmount }
                     });
 
-                    const targetAsset = await tx.asset.findUnique({ where: { id: targetAssetId, userId: req.user.userId } });
                     if (targetAsset) {
                         await tx.asset.update({
                             where: { id: targetAssetId },
-                            data: { value: parseFloat(targetAsset.value) + depositAmount }
+                            data: { value: parseFloat(targetAsset.value) + targetCreditedAmount }
                         });
+                    }
+
+                    let baseAmount = depositAmount;
+                    if (asset.currency !== userCurrency) {
+                        const userConv = await convertAmount(depositAmount, asset.currency, userCurrency);
+                        baseAmount = userConv.convertedAmount;
                     }
 
                     await tx.transaction.create({
@@ -85,6 +111,10 @@ export const createGoal = async (req, res) => {
                             toAssetId: targetAssetId,
                             type: 'TRANSFER',
                             amount: depositAmount,
+                            currency: asset.currency,
+                            exchangeRate: rate,
+                            targetAmount: targetCreditedAmount,
+                            baseAmount,
                             description: `Goal funding transfer: ${name}`,
                             date: new Date()
                         }
@@ -97,6 +127,9 @@ export const createGoal = async (req, res) => {
                             assetId: fundingAssetId,
                             type: 'TRANSFER',
                             amount: depositAmount,
+                            currency: asset.currency,
+                            exchangeRate: 1.0,
+                            baseAmount: depositAmount,
                             description: `Goal funding: ${name}`,
                             date: new Date()
                         }
@@ -108,12 +141,21 @@ export const createGoal = async (req, res) => {
                         data: { value: parseFloat(asset.value) - depositAmount }
                     });
 
+                    let baseAmount = depositAmount;
+                    if (asset.currency !== userCurrency) {
+                        const userConv = await convertAmount(depositAmount, asset.currency, userCurrency);
+                        baseAmount = userConv.convertedAmount;
+                    }
+
                     await tx.transaction.create({
                         data: {
                             userId: req.user.userId,
                             assetId: fundingAssetId,
                             type: 'TRANSFER',
                             amount: depositAmount,
+                            currency: asset.currency,
+                            exchangeRate: 1.0,
+                            baseAmount,
                             description: `Initial deposit for goal: ${name}`,
                             date: new Date()
                         }
@@ -130,6 +172,7 @@ export const createGoal = async (req, res) => {
                         name,
                         targetAmount: parseFloat(targetAmount),
                         currentAmount: 0,
+                        currency: goalCurrency,
                         expectedDate: new Date(expectedDate),
                         ...(recurringAmount && { recurringAmount: parseFloat(recurringAmount) }),
                         ...(recurringFrequency && { recurringFrequency: recurringFrequency.toUpperCase() }),
@@ -138,15 +181,11 @@ export const createGoal = async (req, res) => {
                         ...(urls.length > 0 && { imageUrls: urls })
                     }
                 });
-
                 return newGoal;
             });
         }
 
-        res.status(201).json({
-            success: true,
-            data: goal
-        });
+        res.status(201).json({ success: true, data: goal });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -155,7 +194,7 @@ export const createGoal = async (req, res) => {
 export const addFundsToGoal = async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount, assetId } = req.body;
+        const { amount, assetId, destinationAmount, exchangeRate } = req.body;
 
         const fundAmount = parseFloat(amount);
 
@@ -179,6 +218,12 @@ export const addFundsToGoal = async (req, res) => {
             return res.status(400).json({ success: false, error: 'Source asset not found or insufficient funds' });
         }
 
+        const user = await prisma.user.findUnique({
+            where: { id: req.user.userId },
+            select: { currency: true }
+        });
+        const userCurrency = user?.currency || 'INR';
+
         const newAmount = Math.min(parseFloat(goal.targetAmount), parseFloat(goal.currentAmount) + fundAmount);
         const actualDeposit = newAmount - parseFloat(goal.currentAmount);
 
@@ -189,17 +234,41 @@ export const addFundsToGoal = async (req, res) => {
             });
 
             if (goal.targetAssetId && goal.targetAssetId !== assetId) {
+                const tAsset = await tx.asset.findUnique({ where: { id: goal.targetAssetId } });
+                
+                let targetCredit = actualDeposit;
+                let rate = 1.0;
+
+                if (tAsset && sourceAsset.currency !== tAsset.currency) {
+                    if (destinationAmount !== undefined && destinationAmount !== null) {
+                        targetCredit = parseFloat(destinationAmount);
+                        rate = exchangeRate ? parseFloat(exchangeRate) : parseFloat((targetCredit / actualDeposit).toFixed(6));
+                    } else if (exchangeRate !== undefined && exchangeRate !== null) {
+                        rate = parseFloat(exchangeRate);
+                        targetCredit = parseFloat((actualDeposit * rate).toFixed(4));
+                    } else {
+                        const conv = await convertAmount(actualDeposit, sourceAsset.currency, tAsset.currency);
+                        targetCredit = conv.convertedAmount;
+                        rate = conv.exchangeRate;
+                    }
+                }
+
                 await tx.asset.update({
                     where: { id: assetId },
                     data: { value: parseFloat(sourceAsset.value) - actualDeposit }
                 });
 
-                const tAsset = await tx.asset.findUnique({ where: { id: goal.targetAssetId } });
                 if (tAsset) {
                     await tx.asset.update({
                         where: { id: goal.targetAssetId },
-                        data: { value: parseFloat(tAsset.value) + actualDeposit }
+                        data: { value: parseFloat(tAsset.value) + targetCredit }
                     });
+                }
+
+                let baseAmount = actualDeposit;
+                if (sourceAsset.currency !== userCurrency) {
+                    const userConv = await convertAmount(actualDeposit, sourceAsset.currency, userCurrency);
+                    baseAmount = userConv.convertedAmount;
                 }
 
                 await tx.transaction.create({
@@ -209,6 +278,10 @@ export const addFundsToGoal = async (req, res) => {
                         toAssetId: goal.targetAssetId,
                         type: 'TRANSFER',
                         amount: actualDeposit,
+                        currency: sourceAsset.currency,
+                        exchangeRate: rate,
+                        targetAmount: targetCredit,
+                        baseAmount,
                         description: `Goal funding transfer: ${goal.name}`,
                         date: new Date()
                     }
@@ -221,6 +294,9 @@ export const addFundsToGoal = async (req, res) => {
                         assetId,
                         type: 'TRANSFER',
                         amount: actualDeposit,
+                        currency: sourceAsset.currency,
+                        exchangeRate: 1.0,
+                        baseAmount: actualDeposit,
                         description: `Goal funding: ${goal.name}`,
                         date: new Date()
                     }
@@ -231,12 +307,21 @@ export const addFundsToGoal = async (req, res) => {
                     data: { value: parseFloat(sourceAsset.value) - actualDeposit }
                 });
 
+                let baseAmount = actualDeposit;
+                if (sourceAsset.currency !== userCurrency) {
+                    const userConv = await convertAmount(actualDeposit, sourceAsset.currency, userCurrency);
+                    baseAmount = userConv.convertedAmount;
+                }
+
                 await tx.transaction.create({
                     data: {
                         userId: req.user.userId,
                         assetId,
                         type: 'TRANSFER',
                         amount: actualDeposit,
+                        currency: sourceAsset.currency,
+                        exchangeRate: 1.0,
+                        baseAmount,
                         description: `Goal funding: ${goal.name}`,
                         date: new Date()
                     }
@@ -254,7 +339,7 @@ export const addFundsToGoal = async (req, res) => {
 export const updateGoal = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, targetAmount, expectedDate, recurringAmount, recurringFrequency, isPinned, sourceAssetId, targetAssetId, imageUrls } = req.body;
+        const { name, targetAmount, currency, expectedDate, recurringAmount, recurringFrequency, isPinned, sourceAssetId, targetAssetId, imageUrls } = req.body;
         
         let urls = [];
         if (imageUrls) {
@@ -278,6 +363,7 @@ export const updateGoal = async (req, res) => {
                 data: {
                     ...(name && { name }),
                     ...(targetAmount !== undefined && { targetAmount: parseFloat(targetAmount) }),
+                    ...(currency && { currency: currency.trim().toUpperCase() }),
                     ...(expectedDate && { expectedDate: new Date(expectedDate) }),
                     ...(recurringAmount !== undefined && { recurringAmount: recurringAmount ? parseFloat(recurringAmount) : null }),
                     ...(recurringFrequency !== undefined && { recurringFrequency: recurringFrequency ? recurringFrequency.toUpperCase() : null }),

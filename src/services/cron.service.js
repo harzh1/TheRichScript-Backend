@@ -83,6 +83,10 @@ const processAutoFunding = async () => {
                                 toAssetId: targetAsset.id,
                                 type: 'TRANSFER',
                                 amount: fundAmount,
+                                currency: asset.currency || 'INR',
+                                exchangeRate: 1.0,
+                                targetAmount: fundAmount,
+                                baseAmount: fundAmount,
                                 description: `Auto-funding transfer for goal: ${goal.name}`,
                                 date: new Date(simulatedDate)
                             });
@@ -93,6 +97,9 @@ const processAutoFunding = async () => {
                                 assetId: asset.id,
                                 type: 'TRANSFER',
                                 amount: fundAmount,
+                                currency: asset.currency || 'INR',
+                                exchangeRate: 1.0,
+                                baseAmount: fundAmount,
                                 description: `Auto-funding for goal: ${goal.name}`,
                                 date: new Date(simulatedDate)
                             });
@@ -198,6 +205,10 @@ const processRecurringPlans = async () => {
                             toAssetId: targetAsset.id,
                             type: 'TRANSFER',
                             amount: parseFloat(plan.amount),
+                            currency: asset.currency || 'INR',
+                            exchangeRate: 1.0,
+                            targetAmount: parseFloat(plan.amount),
+                            baseAmount: parseFloat(plan.amount),
                             categoryId: plan.categoryId,
                             description: `Auto-transfer: ${plan.name}`,
                             date: new Date(currentNextDate)
@@ -208,6 +219,9 @@ const processRecurringPlans = async () => {
                             assetId: asset.id,
                             type: isIncome ? 'INCOME' : 'EXPENSE',
                             amount: parseFloat(plan.amount),
+                            currency: asset.currency || 'INR',
+                            exchangeRate: 1.0,
+                            baseAmount: parseFloat(plan.amount),
                             categoryId: plan.categoryId,
                             description: `Auto-${isIncome ? 'income' : 'expense'}: ${plan.name}`,
                             date: new Date(currentNextDate)
