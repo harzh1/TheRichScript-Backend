@@ -1,5 +1,4 @@
 import prisma from '../config/db.js';
-import { resolveCategoryId } from '../controllers/category.controller.js';
 
 export const runAllCronJobs = async () => {
     console.log('Running auto-funding task...');
@@ -37,7 +36,7 @@ const processAutoFunding = async () => {
                 nextFundingDate.setMilliseconds(nextFundingDate.getMilliseconds() - 1); // ensure it's <= now
             }
 
-            if (nextFundingDate.getTime() <= now.getTime() && goal.currentAmount < goal.targetAmount) {
+            if (nextFundingDate.getTime() <= now.getTime() && parseFloat(goal.currentAmount) < parseFloat(goal.targetAmount)) {
                 await prisma.$transaction(async (tx) => {
                     const asset = await tx.asset.findUnique({ where: { id: goal.sourceAssetId } });
                     if (!asset) {
@@ -45,19 +44,16 @@ const processAutoFunding = async () => {
                         return;
                     }
 
-                    let currentAssetBalance = asset.value;
-                    let currentGoalAmount = goal.currentAmount;
+                    let currentAssetBalance = parseFloat(asset.value);
+                    let currentGoalAmount = parseFloat(goal.currentAmount);
                     let loops = 0;
                     
                     let targetAsset = null;
                     let currentTargetBalance = 0;
                     if (goal.targetAssetId) {
                         targetAsset = await tx.asset.findUnique({ where: { id: goal.targetAssetId } });
-                        if (targetAsset) currentTargetBalance = targetAsset.value;
+                        if (targetAsset) currentTargetBalance = parseFloat(targetAsset.value);
                     }
-                    
-                    const categoryId = await resolveCategoryId(tx, goal.userId, 'GOAL FUNDING');
-                    
                     let simulatedDate = new Date(nextFundingDate);
                     // Prevent backdating further than creation date just in case
                     if (goal.createdAt && simulatedDate < goal.createdAt) {
@@ -66,9 +62,9 @@ const processAutoFunding = async () => {
 
                     let transactionsToCreate = [];
 
-                    while (simulatedDate.getTime() <= now.getTime() && currentGoalAmount < goal.targetAmount && loops < 365) {
-                        const amountNeeded = goal.targetAmount - currentGoalAmount;
-                        const fundAmount = Math.min(goal.recurringAmount, amountNeeded);
+                    while (simulatedDate.getTime() <= now.getTime() && currentGoalAmount < parseFloat(goal.targetAmount) && loops < 365) {
+                        const amountNeeded = parseFloat(goal.targetAmount) - currentGoalAmount;
+                        const fundAmount = Math.min(parseFloat(goal.recurringAmount), amountNeeded);
 
                         if (currentAssetBalance < fundAmount) {
                             console.log(`[CRON] Insufficient funds to continue funding goal: ${goal.name}`);
@@ -79,24 +75,24 @@ const processAutoFunding = async () => {
                         currentGoalAmount += fundAmount;
                         if (targetAsset) currentTargetBalance += fundAmount;
                         
-                        if (goal.targetAssetId && targetAsset) {
+                        if (goal.targetAssetId && targetAsset && goal.targetAssetId !== asset.id) {
+                            // Different source and target assets — create a TRANSFER
                             transactionsToCreate.push({
                                 userId: goal.userId,
                                 assetId: asset.id,
                                 toAssetId: targetAsset.id,
                                 type: 'TRANSFER',
                                 amount: fundAmount,
-                                categoryId,
                                 description: `Auto-funding transfer for goal: ${goal.name}`,
                                 date: new Date(simulatedDate)
                             });
                         } else {
+                            // Same asset or no target — money earmarked for goal
                             transactionsToCreate.push({
                                 userId: goal.userId,
                                 assetId: asset.id,
-                                type: 'EXPENSE',
+                                type: 'TRANSFER',
                                 amount: fundAmount,
-                                categoryId,
                                 description: `Auto-funding for goal: ${goal.name}`,
                                 date: new Date(simulatedDate)
                             });
@@ -166,7 +162,7 @@ const processRecurringPlans = async () => {
                 }
                 
                 const isIncome = plan.txType === 'INCOME';
-                let currentAssetBalance = asset.value;
+                let currentAssetBalance = parseFloat(asset.value);
                 let currentNextDate = new Date(plan.nextDueDate);
                 let loops = 0;
                 
@@ -174,34 +170,34 @@ const processRecurringPlans = async () => {
                 let currentTargetBalance = 0;
                 if (plan.targetAssetId) {
                     targetAsset = await tx.asset.findUnique({ where: { id: plan.targetAssetId } });
-                    if (targetAsset) currentTargetBalance = targetAsset.value;
+                    if (targetAsset) currentTargetBalance = parseFloat(targetAsset.value);
                 }
 
                 let transactionsToCreate = [];
 
                 while (currentNextDate.getTime() <= now.getTime() && loops < 365) {
-                    if (!isIncome && currentAssetBalance < plan.amount) {
+                    if (!isIncome && currentAssetBalance < parseFloat(plan.amount)) {
                         console.log(`[CRON] Insufficient funds to continue processing plan: ${plan.name} at ${currentNextDate.toISOString()}`);
                         break;
                     }
 
                     // Update balances
                     currentAssetBalance = isIncome 
-                        ? currentAssetBalance + plan.amount 
-                        : currentAssetBalance - plan.amount;
+                        ? currentAssetBalance + parseFloat(plan.amount) 
+                        : currentAssetBalance - parseFloat(plan.amount);
                         
                     if (targetAsset) {
-                        currentTargetBalance += plan.amount;
+                        currentTargetBalance += parseFloat(plan.amount);
                     }
 
                     // Create historical transaction
-                    if (plan.targetAssetId && targetAsset) {
+                    if (plan.targetAssetId && targetAsset && plan.targetAssetId !== asset.id) {
                         transactionsToCreate.push({
                             userId: plan.userId,
                             assetId: asset.id,
                             toAssetId: targetAsset.id,
                             type: 'TRANSFER',
-                            amount: plan.amount,
+                            amount: parseFloat(plan.amount),
                             categoryId: plan.categoryId,
                             description: `Auto-transfer: ${plan.name}`,
                             date: new Date(currentNextDate)
@@ -211,7 +207,7 @@ const processRecurringPlans = async () => {
                             userId: plan.userId,
                             assetId: asset.id,
                             type: isIncome ? 'INCOME' : 'EXPENSE',
-                            amount: plan.amount,
+                            amount: parseFloat(plan.amount),
                             categoryId: plan.categoryId,
                             description: `Auto-${isIncome ? 'income' : 'expense'}: ${plan.name}`,
                             date: new Date(currentNextDate)

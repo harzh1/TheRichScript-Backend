@@ -8,9 +8,6 @@ export const getCategories = async (req, res) => {
     try {
         const categories = await prisma.userCategory.findMany({
             where: { userId: req.user.userId },
-            include: {
-                categoryLimits: true
-            },
             orderBy: { name: 'asc' }
         });
 
@@ -18,9 +15,8 @@ export const getCategories = async (req, res) => {
         const data = categories.map(cat => ({
             id: cat.id,
             name: cat.name,
-            monthlyLimit: cat.categoryLimits[0]?.monthlyLimit ?? null,
-            yearlyLimit: cat.categoryLimits[0]?.yearlyLimit ?? null,
-            limitId: cat.categoryLimits[0]?.id ?? null
+            monthlyLimit: cat.monthlyLimit ? parseFloat(cat.monthlyLimit) : null,
+            yearlyLimit: cat.yearlyLimit ? parseFloat(cat.yearlyLimit) : null
         }));
 
         res.status(200).json({ success: true, data });
@@ -45,19 +41,13 @@ export const createCategory = async (req, res) => {
 
         const category = await prisma.$transaction(async (tx) => {
             const cat = await tx.userCategory.create({
-                data: { userId: req.user.userId, name: uppercaseName }
+                data: {
+                    userId: req.user.userId,
+                    name: uppercaseName,
+                    ...(monthlyLimit != null && { monthlyLimit: parseFloat(monthlyLimit) }),
+                    ...(yearlyLimit != null && { yearlyLimit: parseFloat(yearlyLimit) })
+                }
             });
-
-            if (monthlyLimit !== undefined || yearlyLimit !== undefined) {
-                await tx.categoryLimit.create({
-                    data: {
-                        userId: req.user.userId,
-                        categoryId: cat.id,
-                        monthlyLimit: monthlyLimit != null ? parseFloat(monthlyLimit) : null,
-                        yearlyLimit: yearlyLimit != null ? parseFloat(yearlyLimit) : null
-                    }
-                });
-            }
 
             return cat;
         });
@@ -90,30 +80,15 @@ export const updateCategory = async (req, res) => {
         }
 
         const result = await prisma.$transaction(async (tx) => {
-            // Rename if provided
             let updatedCat = existing;
-            if (name && name.toUpperCase() !== existing.name) {
+            
+            if (name || monthlyLimit !== undefined || yearlyLimit !== undefined) {
                 updatedCat = await tx.userCategory.update({
                     where: { id },
-                    data: { name: name.toUpperCase() }
-                });
-            }
-
-            // Upsert limit if provided
-            if (monthlyLimit !== undefined || yearlyLimit !== undefined) {
-                await tx.categoryLimit.upsert({
-                    where: {
-                        userId_categoryId: { userId: req.user.userId, categoryId: id }
-                    },
-                    update: {
+                    data: {
+                        ...(name && { name: name.toUpperCase() }),
                         ...(monthlyLimit !== undefined && { monthlyLimit: monthlyLimit != null ? parseFloat(monthlyLimit) : null }),
                         ...(yearlyLimit !== undefined && { yearlyLimit: yearlyLimit != null ? parseFloat(yearlyLimit) : null })
-                    },
-                    create: {
-                        userId: req.user.userId,
-                        categoryId: id,
-                        monthlyLimit: monthlyLimit != null ? parseFloat(monthlyLimit) : null,
-                        yearlyLimit: yearlyLimit != null ? parseFloat(yearlyLimit) : null
                     }
                 });
             }
@@ -132,7 +107,7 @@ export const updateCategory = async (req, res) => {
 
 /**
  * DELETE /categories/:id
- * Blocks deletion if any transactions or plans reference the category (Option A).
+ * Blocks deletion if any transactions or plans reference the category.
  */
 export const deleteCategory = async (req, res) => {
     try {
@@ -162,7 +137,6 @@ export const deleteCategory = async (req, res) => {
             });
         }
 
-        // Safe to delete — CategoryLimit will cascade-delete
         await prisma.userCategory.delete({ where: { id } });
 
         res.status(200).json({ success: true, message: 'Category deleted successfully' });

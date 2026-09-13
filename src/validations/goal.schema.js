@@ -13,13 +13,15 @@ export const createGoalSchema = z.object({
     name: z.string().min(1, 'Goal name is required'),
     targetAmount: z.coerce.number().positive('Target amount must be greater than 0'),
     expectedDate: z.string().min(1, 'Expected date is required'),
+    initialDeposit: z.coerce.number().nonnegative().optional().nullable(),
+    assetId: z.string().uuid('Invalid Asset ID').optional().nullable(),
     isPinned: z.preprocess(val => val === 'true' || val === true, z.boolean()).optional(),
     recurringAmount: z.coerce.number().nonnegative().optional().nullable(),
     recurringFrequency: z.string().optional().nullable(),
     sourceAssetId: z.string().uuid('Invalid Asset ID').optional().nullable(),
     targetAssetId: z.string().uuid('Invalid Target Asset ID').optional().nullable(),
     imageUrls: imageUrlsSchema
-  })
+  }).passthrough()
 });
 
 export const updateGoalSchema = z.object({

@@ -155,27 +155,23 @@ export const transferAsset = async (req, res) => {
                 throw new Error('One or both assets not found');
             }
 
-            if (fromAsset.value < transferAmount) {
+            if (parseFloat(fromAsset.value) < transferAmount) {
                 throw new Error('Insufficient funds in source asset');
             }
 
             // Update balances
             await tx.asset.update({
                 where: { id: fromAssetId },
-                data: { value: fromAsset.value - transferAmount }
+                data: { value: parseFloat(fromAsset.value) - transferAmount }
             });
 
             await tx.asset.update({
                 where: { id: toAssetId },
-                data: { value: toAsset.value + transferAmount }
+                data: { value: parseFloat(toAsset.value) + transferAmount }
             });
 
             const transferDate = date ? new Date(date) : new Date();
             const transferDesc = description || `Transfer to ${toAsset.name}`;
-
-            // Resolve category
-            const { resolveCategoryId } = await import('./category.controller.js');
-            const categoryId = await resolveCategoryId(tx, req.user.userId, category || 'TRANSFER');
 
             // Create a SINGLE transfer transaction for the ledger
             const transaction = await tx.transaction.create({
@@ -185,7 +181,6 @@ export const transferAsset = async (req, res) => {
                     toAssetId: toAssetId,
                     type: 'TRANSFER',
                     amount: transferAmount,
-                    categoryId,
                     description: transferDesc,
                     date: transferDate
                 }

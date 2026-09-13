@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import prisma from '../config/db.js';
 import { config } from '../config/config.js';
 
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
 export const sanitizeUser = (user) => ({
     id: user.id,
     email: user.email,
@@ -17,11 +19,12 @@ export const sanitizeUser = (user) => ({
 export const generateAuthTokens = async (userId) => {
     const accessToken = jwt.sign({ userId }, config.jwtSecret, { expiresIn: config.jwtAccessExpiration });
     const refreshToken = crypto.randomBytes(40).toString('hex');
+    const hashedToken = hashToken(refreshToken);
     const refreshExpiresAt = new Date(Date.now() + config.jwtRefreshExpirationDays * 24 * 60 * 60 * 1000);
 
     await prisma.refreshToken.create({
         data: {
-            token: refreshToken,
+            token: hashedToken,
             userId,
             expiresAt: refreshExpiresAt
         }
@@ -81,6 +84,11 @@ export const login = async (req, res) => {
         }
 
         const { accessToken, refreshToken } = await generateAuthTokens(user.id);
+
+        await prisma.user.update({
+            where: { id: user.id },
+            data: { lastLoginAt: new Date() }
+        });
 
         res.status(200).json({
             success: true,
@@ -224,8 +232,11 @@ export const deleteAccount = async (req, res) => {
         const userId = req.user.userId;
 
         await prisma.$transaction([
-            prisma.goalImage.deleteMany({
-                where: { goal: { userId } }
+            prisma.notification.deleteMany({
+                where: { userId }
+            }),
+            prisma.auditLog.deleteMany({
+                where: { userId }
             }),
             prisma.goal.deleteMany({
                 where: { userId }
@@ -239,7 +250,7 @@ export const deleteAccount = async (req, res) => {
             prisma.debt.deleteMany({
                 where: { userId }
             }),
-            prisma.categoryLimit.deleteMany({
+            prisma.contact.deleteMany({
                 where: { userId }
             }),
             prisma.incomeSource.deleteMany({
@@ -280,8 +291,9 @@ export const refreshTokenHandler = async (req, res) => {
             return res.status(400).json({ success: false, error: 'Refresh token is required.' });
         }
 
+        const hashedToken = hashToken(refreshToken);
         const tokenRecord = await prisma.refreshToken.findUnique({
-            where: { token: refreshToken },
+            where: { token: hashedToken },
             include: { user: true }
         });
 
@@ -295,6 +307,7 @@ export const refreshTokenHandler = async (req, res) => {
 
         // Token Rotation: revoke/delete the used refresh token and issue a fresh pair
         const newRefreshToken = crypto.randomBytes(40).toString('hex');
+        const newHashedToken = hashToken(newRefreshToken);
         const newRefreshExpiresAt = new Date(Date.now() + config.jwtRefreshExpirationDays * 24 * 60 * 60 * 1000);
         const newAccessToken = jwt.sign({ userId: tokenRecord.userId }, config.jwtSecret, { expiresIn: config.jwtAccessExpiration });
 
@@ -304,7 +317,7 @@ export const refreshTokenHandler = async (req, res) => {
             }),
             prisma.refreshToken.create({
                 data: {
-                    token: newRefreshToken,
+                    token: newHashedToken,
                     userId: tokenRecord.userId,
                     expiresAt: newRefreshExpiresAt
                 }
@@ -331,8 +344,9 @@ export const logoutHandler = async (req, res) => {
         const { refreshToken } = req.body;
 
         if (refreshToken) {
+            const hashedToken = hashToken(refreshToken);
             await prisma.refreshToken.deleteMany({
-                where: { token: refreshToken }
+                where: { token: hashedToken }
             });
         }
 

@@ -9,22 +9,27 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// ─── User ────────────────────────────────────────────────────────────────────
+
 model User {
-  id             String   @id @default(uuid())
-  firstName      String
-  lastName       String?
-  email          String   @unique
-  passwordHash   String
-  telegramChatId String?
-  country        String   @default("IN")
-  currency       String   @default("INR")
-  avatarUrl      String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id              String    @id @default(uuid())
+  firstName       String
+  lastName        String?
+  email           String    @unique
+  passwordHash    String
+  telegramChatId  String?
+  country         String    @default("IN")
+  currency        String    @default("INR")
+  avatarUrl       String?
+  isActive        Boolean   @default(true)
+  lastLoginAt     DateTime?
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
 
   assets          Asset[]
   transactions    Transaction[]
-  categoryLimits  CategoryLimit[]
   userCategories  UserCategory[]
   userAssetTypes  UserAssetType[]
   plannedExpenses PlannedExpense[]
@@ -32,22 +37,28 @@ model User {
   debts           Debt[]
   incomeSources   IncomeSource[]
   refreshTokens   RefreshToken[]
+  contacts        Contact[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]
 }
 
 // ─── Normalized Lookup Tables ────────────────────────────────────────────────
 
 model UserCategory {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name      String
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  monthlyLimit Decimal? @db.Decimal(19, 4)
+  yearlyLimit  Decimal? @db.Decimal(19, 4)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   transactions    Transaction[]
   plannedExpenses PlannedExpense[]
-  categoryLimits  CategoryLimit[]
 
   @@unique([userId, name])
+  @@index([userId])
 }
 
 model UserAssetType {
@@ -60,21 +71,23 @@ model UserAssetType {
   assets Asset[]
 
   @@unique([userId, name])
+  @@index([userId])
 }
 
 // ─── Core Financial Tables ───────────────────────────────────────────────────
 
 model Asset {
-  id        String        @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
-  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
   typeId    String
   assetType UserAssetType @relation(fields: [typeId], references: [id])
-  value     Float
-  quantity  Float?
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  value     Decimal   @db.Decimal(19, 4)
+  quantity  Decimal?  @db.Decimal(19, 4)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   transactions          Transaction[]
   transactionsTarget    Transaction[]    @relation("TransactionTargetAsset")
@@ -84,6 +97,9 @@ model Asset {
   goalsSource           Goal[]           @relation("GoalSourceAsset")
   goalsTarget           Goal[]           @relation("GoalTargetAsset")
   incomeSourcesDefault  IncomeSource[]   @relation("IncomeSourceDefaultAsset")
+
+  @@index([userId])
+  @@index([typeId])
 }
 
 enum IncomeCategoryType {
@@ -98,7 +114,7 @@ model IncomeSource {
   name           String
   type           IncomeCategoryType @default(ACTIVE)
   isFixed        Boolean            @default(true)
-  expectedAmount Float?
+  expectedAmount Decimal?           @db.Decimal(19, 4)
   frequency      Frequency?
   defaultAssetId String?
   defaultAsset   Asset?             @relation("IncomeSourceDefaultAsset", fields: [defaultAssetId], references: [id], onDelete: SetNull)
@@ -108,15 +124,22 @@ model IncomeSource {
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 
-  transactions   Transaction[]
+  transactions Transaction[]
 
   @@unique([userId, name])
+  @@index([userId])
 }
 
 enum TransactionType {
   INCOME
   EXPENSE
   TRANSFER
+}
+
+enum DebtAction {
+  CREATE
+  SETTLE
+  PARTIAL_PAYMENT
 }
 
 model Transaction {
@@ -128,30 +151,26 @@ model Transaction {
   toAssetId        String?
   toAsset          Asset?          @relation(fields: [toAssetId], references: [id], onDelete: Cascade, name: "TransactionTargetAsset")
   type             TransactionType
-  amount           Float
-  categoryId       String
-  category         UserCategory    @relation(fields: [categoryId], references: [id])
+  amount           Decimal         @db.Decimal(19, 4)
+  categoryId       String?
+  category         UserCategory?   @relation(fields: [categoryId], references: [id])
   incomeSourceId   String?
   incomeSource     IncomeSource?   @relation(fields: [incomeSourceId], references: [id], onDelete: SetNull)
-  description      String
+  description      String?
   date             DateTime
   receiptImageUrl  String?
   linkedDebtId     String?
-  linkedDebtAction String?
+  linkedDebt       Debt?           @relation(fields: [linkedDebtId], references: [id], onDelete: SetNull)
+  linkedDebtAction DebtAction?
   createdAt        DateTime        @default(now())
-}
+  updatedAt        DateTime        @updatedAt
+  deletedAt        DateTime?
 
-model CategoryLimit {
-  id           String       @id @default(uuid())
-  userId       String
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  categoryId   String
-  category     UserCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  monthlyLimit Float?
-  yearlyLimit  Float?
-  createdAt    DateTime     @default(now())
-
-  @@unique([userId, categoryId])
+  @@index([userId])
+  @@index([assetId])
+  @@index([categoryId])
+  @@index([userId, date])
+  @@index([date])
 }
 
 // ─── Planning & Goals ────────────────────────────────────────────────────────
@@ -179,13 +198,17 @@ model PlannedExpense {
   name          String
   categoryId    String
   category      UserCategory       @relation(fields: [categoryId], references: [id])
-  amount        Float
+  amount        Decimal            @db.Decimal(19, 4)
   type          PlannedExpenseType
   txType        TransactionType    @default(EXPENSE)
   frequency     Frequency?
   nextDueDate   DateTime?
   lastFundedAt  DateTime?
   createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([userId])
+  @@index([userId, nextDueDate])
 }
 
 model Goal {
@@ -193,28 +216,23 @@ model Goal {
   userId             String
   user               User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   name               String
-  targetAmount       Float
-  currentAmount      Float      @default(0)
+  targetAmount       Decimal    @db.Decimal(19, 4)
+  currentAmount      Decimal    @default(0) @db.Decimal(19, 4)
   expectedDate       DateTime
   isPinned           Boolean    @default(false)
-  recurringAmount    Float?
+  recurringAmount    Decimal?   @db.Decimal(19, 4)
   recurringFrequency Frequency?
   sourceAssetId      String?
   sourceAsset        Asset?     @relation(name: "GoalSourceAsset", fields: [sourceAssetId], references: [id])
   targetAssetId      String?
   targetAsset        Asset?     @relation(name: "GoalTargetAsset", fields: [targetAssetId], references: [id], onDelete: SetNull)
+  imageUrls          String[]
   lastFundedAt       DateTime?
   createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
 
-  images GoalImage[]
-}
-
-model GoalImage {
-  id        String   @id @default(uuid())
-  goalId    String
-  goal      Goal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  url       String
-  createdAt DateTime @default(now())
+  @@index([userId])
+  @@index([userId, isPinned])
 }
 
 // ─── Debts ───────────────────────────────────────────────────────────────────
@@ -238,12 +256,98 @@ model Debt {
   asset         Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
   type          DebtType
   personName    String
-  amount        Float
-  settledAmount Float      @default(0)
+  contactId     String?
+  contact       Contact?   @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  amount        Decimal    @db.Decimal(19, 4)
+  settledAmount Decimal    @default(0) @db.Decimal(19, 4)
   dueDate       DateTime?
+  notes         String?
   status        DebtStatus @default(ACTIVE)
   createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  deletedAt     DateTime?
+
+  transactions Transaction[]
+
+  @@index([userId])
+  @@index([userId, status])
 }
+
+// ─── Contacts ────────────────────────────────────────────────────────────────
+
+model Contact {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  phone     String?
+  email     String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  debts Debt[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+
+enum NotificationType {
+  DEBT_DUE
+  GOAL_MILESTONE
+  BUDGET_EXCEEDED
+  PLANNED_EXPENSE_DUE
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  isRead    Boolean          @default(false)
+  metadata  Json?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+}
+
+// ─── Audit Log ───────────────────────────────────────────────────────────────
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  PASSWORD_CHANGE
+  SETTLE_DEBT
+  FUND_GOAL
+}
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action     AuditAction
+  entityType String
+  entityId   String?
+  oldValues  Json?
+  newValues  Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
 
 model RefreshToken {
   id        String   @id @default(uuid())

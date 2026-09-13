@@ -3,10 +3,10 @@ import { z } from 'zod';
 export const createTransactionSchema = z.object({
   body: z.object({
     assetId: z.string().uuid('Invalid Asset ID'),
-    type: z.enum(['INCOME', 'EXPENSE'], { required_error: 'Type must be INCOME or EXPENSE' }),
+    type: z.enum(['INCOME', 'EXPENSE', 'TRANSFER'], { required_error: 'Type must be INCOME, EXPENSE, or TRANSFER' }),
     amount: z.coerce.number().positive('Amount must be greater than 0'),
-    category: z.string().min(1, 'Category is required'),
-    description: z.string().optional().nullable().default(''),
+    category: z.string().min(1, 'Category cannot be empty').optional().nullable(),
+    description: z.string().optional().nullable(),
     date: z.string(),
     receiptImageUrl: z.string().url().optional().nullable()
   })

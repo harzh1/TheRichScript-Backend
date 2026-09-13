@@ -81,13 +81,15 @@ export const createTransaction = async (req, res) => {
         const parsedAmount = parseFloat(amount);
         const receiptImageUrl = req.file ? req.file.path : null;
 
-        if (!assetId || !type || !amount || !category) {
+        if (!assetId || !type || !amount) {
             return res.status(400).json({ success: false, error: 'Missing required fields' });
         }
 
         const result = await prisma.$transaction(async (tx) => {
-            // Resolve category name → id (auto-creates if needed)
-            const categoryId = await resolveCategoryId(tx, req.user.userId, category);
+            // Resolve category name → id (auto-creates if needed), null for transfers without category
+            const categoryId = category
+                ? await resolveCategoryId(tx, req.user.userId, category)
+                : null;
 
             // If income, resolve income source ID
             let resolvedIncomeSourceId = null;
@@ -125,13 +127,13 @@ export const createTransaction = async (req, res) => {
                 throw new Error('Asset not found or already deleted');
             }
 
-            if (type.toUpperCase() === 'EXPENSE' && asset.value < parsedAmount) {
+            if (type.toUpperCase() === 'EXPENSE' && parseFloat(asset.value) < parsedAmount) {
                 throw new Error('Insufficient funds in the selected asset');
             }
 
             const newBalance = type.toUpperCase() === 'INCOME' 
-                ? asset.value + parsedAmount 
-                : asset.value - parsedAmount;
+                ? parseFloat(asset.value) + parsedAmount 
+                : parseFloat(asset.value) - parsedAmount;
 
             await tx.asset.update({
                 where: { id: assetId },
@@ -140,7 +142,7 @@ export const createTransaction = async (req, res) => {
 
             return {
                 ...transaction,
-                category: transaction.category.name,
+                category: transaction.category ? transaction.category.name : null,
                 categoryId: transaction.categoryId,
                 incomeSource: transaction.incomeSource ? transaction.incomeSource.name : null,
                 incomeSourceId: transaction.incomeSourceId
@@ -172,7 +174,7 @@ export const updateTransaction = async (req, res) => {
         }
 
         const newType = (type || existingTx.type).toUpperCase();
-        const newAmount = amount !== undefined ? parseFloat(amount) : existingTx.amount;
+        const newAmount = amount !== undefined ? parseFloat(amount) : parseFloat(existingTx.amount);
         const newAssetId = assetId || existingTx.assetId;
         const newDate = date ? new Date(date) : existingTx.date;
         const newDescription = description !== undefined ? description : existingTx.description;
@@ -190,23 +192,23 @@ export const updateTransaction = async (req, res) => {
                     if (oldTargetAsset) {
                         await tx.asset.update({
                             where: { id: existingTx.assetId },
-                            data: { value: oldAsset.value + existingTx.amount }
+                            data: { value: parseFloat(oldAsset.value) + parseFloat(existingTx.amount) }
                         });
                         await tx.asset.update({
                             where: { id: existingTx.toAssetId },
-                            data: { value: oldTargetAsset.value - existingTx.amount }
+                            data: { value: parseFloat(oldTargetAsset.value) - parseFloat(existingTx.amount) }
                         });
                     }
                 }
             } else if (existingTx.type === 'INCOME') {
                 await tx.asset.update({
                     where: { id: existingTx.assetId },
-                    data: { value: oldAsset.value - existingTx.amount }
+                    data: { value: parseFloat(oldAsset.value) - parseFloat(existingTx.amount) }
                 });
             } else { // EXPENSE
                 await tx.asset.update({
                     where: { id: existingTx.assetId },
-                    data: { value: oldAsset.value + existingTx.amount }
+                    data: { value: parseFloat(oldAsset.value) + parseFloat(existingTx.amount) }
                 });
             }
 
@@ -233,13 +235,13 @@ export const updateTransaction = async (req, res) => {
                 throw new Error('Selected asset not found');
             }
 
-            if (newType === 'EXPENSE' && targetAsset.value < newAmount) {
+            if (newType === 'EXPENSE' && parseFloat(targetAsset.value) < newAmount) {
                 throw new Error('Insufficient funds in the selected asset');
             }
 
             const updatedAssetBalance = newType === 'INCOME'
-                ? targetAsset.value + newAmount
-                : targetAsset.value - newAmount;
+                ? parseFloat(targetAsset.value) + newAmount
+                : parseFloat(targetAsset.value) - newAmount;
 
             await tx.asset.update({
                 where: { id: newAssetId },
@@ -309,25 +311,25 @@ export const deleteTransaction = async (req, res) => {
             if (!targetAsset) {
                 return res.status(400).json({ success: false, error: 'Unable to delete: The target asset no longer exists.' });
             }
-            if (targetAsset.value < transaction.amount) {
+            if (parseFloat(targetAsset.value) < parseFloat(transaction.amount)) {
                 return res.status(400).json({ success: false, error: 'Unable to delete: Reverting this transfer would result in a negative target asset balance.' });
             }
 
             await prisma.$transaction(async (tx) => {
                 await tx.asset.update({
                     where: { id: transaction.assetId },
-                    data: { value: asset.value + transaction.amount }
+                    data: { value: parseFloat(asset.value) + parseFloat(transaction.amount) }
                 });
                 await tx.asset.update({
                     where: { id: transaction.toAssetId },
-                    data: { value: targetAsset.value - transaction.amount }
+                    data: { value: parseFloat(targetAsset.value) - parseFloat(transaction.amount) }
                 });
                 await tx.transaction.delete({ where: { id } });
             });
         } else {
             const revertedBalance = transaction.type === 'INCOME'
-                ? asset.value - transaction.amount
-                : asset.value + transaction.amount;
+                ? parseFloat(asset.value) - parseFloat(transaction.amount)
+                : parseFloat(asset.value) + parseFloat(transaction.amount);
             
             if (transaction.type === 'INCOME' && revertedBalance < 0) {
                 return res.status(400).json({ success: false, error: 'Unable to delete: Reverting this income would result in a negative asset balance.' });
@@ -345,7 +347,7 @@ export const deleteTransaction = async (req, res) => {
                         if (transaction.linkedDebtAction === 'CREATE') {
                             await tx.debt.delete({ where: { id: debt.id } });
                         } else if (transaction.linkedDebtAction === 'SETTLE') {
-                            const newSettledAmount = Math.max(0, debt.settledAmount - transaction.amount);
+                            const newSettledAmount = Math.max(0, parseFloat(debt.settledAmount) - parseFloat(transaction.amount));
                             await tx.debt.update({
                                 where: { id: debt.id },
                                 data: {

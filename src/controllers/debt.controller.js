@@ -1,5 +1,4 @@
 import prisma from '../config/db.js';
-import { resolveCategoryId } from './category.controller.js';
 
 export const getDebts = async (req, res) => {
     try {
@@ -14,7 +13,7 @@ export const getDebts = async (req, res) => {
 
 export const createDebt = async (req, res) => {
     try {
-        const { assetId, type, person, personName, amount, dueDate } = req.body;
+        const { assetId, type, person, personName, amount, dueDate, contactId, notes } = req.body;
         const parsedAmount = parseFloat(amount);
 
         const result = await prisma.$transaction(async (tx) => {
@@ -25,7 +24,9 @@ export const createDebt = async (req, res) => {
                     type: type.toUpperCase(),
                     personName: person || personName,
                     amount: parsedAmount,
-                    ...(dueDate ? { dueDate: new Date(dueDate) } : {})
+                    ...(dueDate ? { dueDate: new Date(dueDate) } : {}),
+                    ...(contactId && { contactId }),
+                    ...(notes && { notes })
                 }
             });
 
@@ -33,8 +34,8 @@ export const createDebt = async (req, res) => {
             const asset = await tx.asset.findUnique({ where: { id: assetId } });
             if (asset) {
                 const newBalance = type.toUpperCase() === 'LENT' 
-                    ? asset.value - parsedAmount 
-                    : asset.value + parsedAmount;
+                    ? parseFloat(asset.value) - parsedAmount 
+                    : parseFloat(asset.value) + parsedAmount;
                 
                 await tx.asset.update({
                     where: { id: assetId },
@@ -43,8 +44,6 @@ export const createDebt = async (req, res) => {
             }
 
             // Create Ledger Transaction
-            const categoryName = 'DEBT';
-            const categoryId = await resolveCategoryId(tx, req.user.userId, categoryName);
             const txDescription = type.toUpperCase() === 'LENT' ? `Lent to ${debt.personName}` : `Borrowed from ${debt.personName}`;
 
             await tx.transaction.create({
@@ -53,7 +52,6 @@ export const createDebt = async (req, res) => {
                     assetId,
                     type: type.toUpperCase() === 'LENT' ? 'EXPENSE' : 'INCOME',
                     amount: parsedAmount,
-                    categoryId,
                     description: txDescription,
                     date: debt.createdAt,
                     linkedDebtId: debt.id,
@@ -81,10 +79,10 @@ export const settleDebt = async (req, res) => {
             if (!debt) throw new Error('Debt not found');
             if (debt.status === 'SETTLED') throw new Error('Debt is already fully settled');
             if (debt.status === 'EXPIRED') throw new Error('Cannot settle a written-off debt');
-            if (parsedAmount > (debt.amount - debt.settledAmount)) throw new Error('Settle amount exceeds remaining balance');
+            if (parsedAmount > (parseFloat(debt.amount) - parseFloat(debt.settledAmount))) throw new Error('Settle amount exceeds remaining balance');
 
-            const newSettledAmount = debt.settledAmount + parsedAmount;
-            const status = newSettledAmount >= debt.amount ? 'SETTLED' : 'ACTIVE';
+            const newSettledAmount = parseFloat(debt.settledAmount) + parsedAmount;
+            const status = newSettledAmount >= parseFloat(debt.amount) ? 'SETTLED' : 'ACTIVE';
 
             const updatedDebt = await tx.debt.update({
                 where: { id },
@@ -94,8 +92,8 @@ export const settleDebt = async (req, res) => {
             const asset = await tx.asset.findUnique({ where: { id: assetId } });
             if (asset) {
                 const newBalance = debt.type === 'LENT'
-                    ? asset.value + parsedAmount
-                    : asset.value - parsedAmount;
+                    ? parseFloat(asset.value) + parsedAmount
+                    : parseFloat(asset.value) - parsedAmount;
                 
                 await tx.asset.update({
                     where: { id: assetId },
@@ -104,8 +102,6 @@ export const settleDebt = async (req, res) => {
             }
 
             // Create Ledger Transaction for Settlement
-            const categoryName = 'DEBT REPAYMENT';
-            const categoryId = await resolveCategoryId(tx, req.user.userId, categoryName);
             const txDescription = debt.type === 'LENT' ? `Repayment from ${debt.personName}` : `Repayment to ${debt.personName}`;
 
             await tx.transaction.create({
@@ -114,7 +110,6 @@ export const settleDebt = async (req, res) => {
                     assetId,
                     type: debt.type === 'LENT' ? 'INCOME' : 'EXPENSE',
                     amount: parsedAmount,
-                    categoryId,
                     description: txDescription,
                     date: new Date(),
                     linkedDebtId: debt.id,
@@ -167,7 +162,7 @@ export const writeOffDebt = async (req, res) => {
 export const updateDebt = async (req, res) => {
     try {
         const { id } = req.params;
-        const { assetId, type, person, personName, amount, dueDate } = req.body;
+        const { assetId, type, person, personName, amount, dueDate, contactId, notes } = req.body;
         const parsedAmount = amount !== undefined ? parseFloat(amount) : undefined;
 
         const result = await prisma.$transaction(async (tx) => {
@@ -180,7 +175,7 @@ export const updateDebt = async (req, res) => {
             if (oldDebt.assetId) {
                 const oldAsset = await tx.asset.findUnique({ where: { id: oldDebt.assetId } });
                 if (oldAsset) {
-                    const revertBalance = oldDebt.type === 'LENT' ? oldAsset.value + oldDebt.amount : oldAsset.value - oldDebt.amount;
+                    const revertBalance = oldDebt.type === 'LENT' ? parseFloat(oldAsset.value) + parseFloat(oldDebt.amount) : parseFloat(oldAsset.value) - parseFloat(oldDebt.amount);
                     await tx.asset.update({ where: { id: oldDebt.assetId }, data: { value: revertBalance } });
                 }
             }
@@ -193,7 +188,7 @@ export const updateDebt = async (req, res) => {
             if (newAssetId) {
                 const newAsset = await tx.asset.findUnique({ where: { id: newAssetId } });
                 if (newAsset) {
-                    const newBalance = newType === 'LENT' ? newAsset.value - newAmount : newAsset.value + newAmount;
+                    const newBalance = newType === 'LENT' ? parseFloat(newAsset.value) - newAmount : parseFloat(newAsset.value) + newAmount;
                     await tx.asset.update({ where: { id: newAssetId }, data: { value: newBalance } });
                 }
             }
@@ -205,7 +200,9 @@ export const updateDebt = async (req, res) => {
                     ...(newType && { type: newType }),
                     ...(finalPersonName && { personName: finalPersonName }),
                     ...(newAmount !== undefined && { amount: newAmount }),
-                    ...(dueDate !== undefined ? { dueDate: dueDate ? new Date(dueDate) : null } : {})
+                    ...(dueDate !== undefined ? { dueDate: dueDate ? new Date(dueDate) : null } : {}),
+                    ...(contactId !== undefined && { contactId: contactId || null }),
+                    ...(notes !== undefined && { notes: notes || null })
                 }
             });
 

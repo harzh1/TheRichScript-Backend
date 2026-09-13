@@ -108,7 +108,7 @@ export const getIncomeSources = async (req, res) => {
 
         // Map and compute stats for each source
         const mappedSources = sources.map(source => {
-            const totalReceived = source.transactions.reduce((acc, t) => acc + t.amount, 0);
+            const totalReceived = source.transactions.reduce((acc, t) => acc + parseFloat(t.amount), 0);
             const transactionCount = source.transactions.length;
             const lastReceivedDate = source.transactions.length > 0 ? source.transactions[0].date : null;
 
@@ -183,7 +183,7 @@ export const getIncomeSourcesSummary = async (req, res) => {
             if (!source.isActive) continue;
 
             let monthlyEquiv = 0;
-            const amt = source.expectedAmount || 0;
+            const amt = parseFloat(source.expectedAmount) || 0;
             switch (source.frequency) {
                 case 'DAILY': monthlyEquiv = amt * 30; break;
                 case 'WEEKLY': monthlyEquiv = amt * 4.33; break;
@@ -207,8 +207,8 @@ export const getIncomeSourcesSummary = async (req, res) => {
                 totalActiveExpectedMonthly,
                 totalPassiveExpectedMonthly,
                 totalExpectedMonthly: totalActiveExpectedMonthly + totalPassiveExpectedMonthly,
-                totalReceivedThisMonth: monthInflow._sum.amount || 0,
-                totalReceivedThisYear: yearInflow._sum.amount || 0,
+                totalReceivedThisMonth: parseFloat(monthInflow._sum.amount) || 0,
+                totalReceivedThisYear: parseFloat(yearInflow._sum.amount) || 0,
                 totalSourcesCount: sources.length,
                 activeSourcesCount,
                 passiveSourcesCount
